@@ -16,6 +16,7 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v"
+pythonpath = ["src"]
 
 [tool.uv]
 package = true
