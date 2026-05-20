@@ -203,6 +203,19 @@ class LimitOrderBook:
 
         return row
 
+    def orders_at_level(self, price: int, direction: int) -> list[tuple[int, int]]:
+        """
+        Return [(order_id, size), ...] at this price level in time-priority order.
+
+        Used by InjectionSimulator to snapshot which orders are ahead of a
+        newly injected hypothetical order.
+        """
+        sd = self._bids if direction == 1 else self._asks
+        level = sd.get(price)
+        if level is None:
+            return []
+        return [(oid, level.sizes[oid]) for oid in level.queue]
+
     def __len__(self) -> int:
         """Total number of resting orders (not price levels)."""
         return len(self._order_index)
