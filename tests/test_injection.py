@@ -23,6 +23,78 @@ def _make_sim() -> tuple[LimitOrderBook, InjectionSimulator]:
     return book, sim
 
 
+# ── queue granularity at entry ────────────────────────────────────────────────
+
+
+def test_queue_granularity_multiple_orders() -> None:
+    """Three orders totalling 200 shares → granularity = 3/200."""
+    book, sim = _make_sim()
+
+    sim.process_event(_ev(1, 1, 100, 1_000_000, 1, time=34200.0))
+    sim.process_event(_ev(1, 2,  50, 1_000_000, 1, time=34200.1))
+    sim.process_event(_ev(1, 3,  50, 1_000_000, 1, time=34200.2))
+
+    order = HypotheticalOrder(
+        order_id=-1, side="bid", price=1_000_000,
+        size=10, entry_timestamp=34200.3,
+    )
+    sim.inject(order)
+
+    assert order.orders_ahead_at_entry == 3
+    assert order.queue_position_at_entry == 200
+    assert abs(order.queue_granularity_at_entry - 3 / 200) < 1e-9
+
+
+def test_queue_granularity_single_large_order() -> None:
+    """One order of 200 shares → granularity = 1/200."""
+    book, sim = _make_sim()
+
+    sim.process_event(_ev(1, 1, 200, 1_000_000, 1, time=34200.0))
+
+    order = HypotheticalOrder(
+        order_id=-1, side="bid", price=1_000_000,
+        size=10, entry_timestamp=34200.1,
+    )
+    sim.inject(order)
+
+    assert order.orders_ahead_at_entry == 1
+    assert abs(order.queue_granularity_at_entry - 1 / 200) < 1e-9
+
+
+def test_queue_granularity_empty_level() -> None:
+    """Empty queue → granularity is 0.0 (not a division by zero)."""
+    book, sim = _make_sim()
+
+    order = HypotheticalOrder(
+        order_id=-1, side="bid", price=1_000_000,
+        size=10, entry_timestamp=34200.0,
+    )
+    sim.inject(order)
+
+    assert order.orders_ahead_at_entry == 0
+    assert order.queue_granularity_at_entry == 0.0
+
+
+def test_compute_outcomes_includes_granularity() -> None:
+    """compute_outcomes must return orders_ahead_at_entry and queue_granularity_at_entry."""
+    book, sim = _make_sim()
+
+    sim.process_event(_ev(1, 1, 100, 1_000_000, 1, time=34200.0))
+    sim.process_event(_ev(1, 2,  50, 1_000_000, 1, time=34200.1))
+
+    order = HypotheticalOrder(
+        order_id=-1, side="bid", price=1_000_000,
+        size=10, entry_timestamp=34200.2, max_lifetime=1.0,
+    )
+    sim.inject(order)
+    sim.process_event(_ev(1, 99, 5, 999_000, 1, time=34201.3))  # expire it
+
+    out = sim.compute_outcomes(order)
+    assert out["orders_ahead_at_entry"] == 2
+    assert out["queue_position_at_entry"] == 150
+    assert abs(out["queue_granularity_at_entry"] - 2 / 150) < 1e-9
+
+
 # ── queue position at entry ───────────────────────────────────────────────────
 
 

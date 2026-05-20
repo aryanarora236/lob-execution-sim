@@ -60,6 +60,9 @@ class HypotheticalOrder:
 
     Attributes populated by InjectionSimulator.inject():
         queue_position_at_entry   — total visible size ahead of us at injection
+        orders_ahead_at_entry     — count of distinct orders ahead (K)
+        queue_granularity_at_entry — K / queue_position_at_entry (orders per share);
+                                     0.0 when queue is empty
         mid_at_entry              — mid-price at injection (raw units)
         book_imbalance_at_entry   — (bid_sz − ask_sz) / (bid_sz + ask_sz) at TOB
         spread_at_entry_ticks     — best ask − best bid in ticks
@@ -80,6 +83,8 @@ class HypotheticalOrder:
 
     # Populated at inject() time
     queue_position_at_entry: int = field(default=0, init=False)
+    orders_ahead_at_entry: int = field(default=0, init=False)
+    queue_granularity_at_entry: float = field(default=0.0, init=False)
     mid_at_entry: float = field(default=0.0, init=False)
     book_imbalance_at_entry: float = field(default=0.0, init=False)
     spread_at_entry_ticks: int = field(default=0, init=False)
@@ -143,6 +148,11 @@ class InjectionSimulator:
         order._orders_ahead = {oid for oid, _ in level_orders}
         order._volume_ahead = sum(sz for _, sz in level_orders)
         order.queue_position_at_entry = order._volume_ahead
+        order.orders_ahead_at_entry = len(order._orders_ahead)
+        order.queue_granularity_at_entry = (
+            order.orders_ahead_at_entry / order.queue_position_at_entry
+            if order.queue_position_at_entry > 0 else 0.0
+        )
 
         bp, bs, ap, as_ = self._book.top_of_book()
         if bp != -1 and ap != -1:
@@ -242,6 +252,8 @@ class InjectionSimulator:
             "mid_at_full_fill": mid_at_full,
             "adverse_selection_1s": adverse_1s,
             "queue_position_at_entry": order.queue_position_at_entry,
+            "orders_ahead_at_entry": order.orders_ahead_at_entry,
+            "queue_granularity_at_entry": order.queue_granularity_at_entry,
             "book_imbalance_at_entry": order.book_imbalance_at_entry,
             "spread_at_entry_ticks": order.spread_at_entry_ticks,
         }
