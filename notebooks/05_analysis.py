@@ -449,3 +449,76 @@ else:
     print(f"\nOK: LightGBM vs logistic test gap = {gap:+.3f} (within ±0.05)")
 
 print("\n[CP4 complete]\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 6 — Partial dependence plots and model comparison summary
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("=" * 68)
+print("SECTION 6 — Partial dependence plots and model comparison")
+print("=" * 68)
+
+top3_idx = np.argsort(importances)[::-1][:3]
+top3     = [FEATURE_NAMES[i] for i in top3_idx]
+print(f"\nTop 3 features (LightGBM gain): {top3}")
+
+X_median = np.median(X, axis=0)
+N_GRID   = 80
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+for plot_idx, feat_idx in enumerate(top3_idx):
+    feat_name = FEATURE_NAMES[feat_idx]
+    grid      = np.linspace(
+        np.percentile(X[:, feat_idx], 2),
+        np.percentile(X[:, feat_idx], 98),
+        N_GRID,
+    )
+    X_grid             = np.tile(X_median, (N_GRID, 1))
+    X_grid[:, feat_idx] = grid
+
+    pdp_lgb = lgb_model.predict_proba(X_grid)[:, 1]
+    pdp_lr  = lr.predict_proba(scaler.transform(X_grid))[:, 1]
+
+    ax = axes[plot_idx]
+    ax.plot(grid, pdp_lgb, color="tomato",    label="LightGBM", linewidth=2)
+    ax.plot(grid, pdp_lr,  color="steelblue", label="Logistic",  linewidth=2, linestyle="--")
+    ax.axhline(y_tr.mean(), color="black", linestyle=":", linewidth=0.8,
+               alpha=0.6, label=f"Base rate ({y_tr.mean():.1%})")
+    rug = X[:, feat_idx]
+    ax.plot(rug, np.full_like(rug, -0.02), "|", color="gray", alpha=0.08, markersize=4)
+    ax.set_xlabel(feat_name)
+    ax.set_ylabel("Predicted fill probability")
+    ax.set_title(f"PDP: {feat_name}")
+    ax.set_ylim(-0.05, 1.05)
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
+    if plot_idx == 0:
+        ax.legend(fontsize=8)
+
+plt.tight_layout()
+p = PLOTS_DIR / "04_pdp.png"
+fig.savefig(p, dpi=150)
+plt.close(fig)
+print(f"\nPlot saved: {p}")
+
+# ── Model comparison table ────────────────────────────────────────────────────
+print("\n" + "─" * 68)
+print("Model comparison summary")
+print("─" * 68)
+print(f"  {'Model':<20s}  {'AUC train':>10s}  {'AUC test (OOS)':>15s}  {'95% CI'}")
+print(f"  {'-'*20}  {'-'*10}  {'-'*15}  {'-'*20}")
+print(f"  {'Logistic':<20s}  {auc_tr:>10.4f}  {auc_te:>15.4f}  [{auc_lo:.4f}, {auc_hi:.4f}]")
+print(f"  {'LightGBM':<20s}  {auc_lgb_tr:>10.4f}  {auc_lgb_te:>15.4f}  [{lgb_lo:.4f}, {lgb_hi:.4f}]")
+
+print("\n  Significant predictors (logistic, bootstrap 95% CI excludes 0):")
+any_sig = False
+for i in coef_order:
+    if not (coef_lo[i] < 0 < coef_hi[i]):
+        any_sig = True
+        print(f"    {FEATURE_NAMES[i]:<22s}  coef={lr.coef_[0][i]:+.4f}"
+              f"  OR={np.exp(lr.coef_[0][i]):.4f}"
+              f"  CI=[{coef_lo[i]:+.4f}, {coef_hi[i]:+.4f}]")
+if not any_sig:
+    print("    (none)")
+
+print("\n[CP5 complete]\n")
