@@ -253,3 +253,99 @@ for i, name in enumerate(FEATURE_NAMES):
     print(f"  {name:<20s}  r={r:+.4f}  p={p:.4f} {sig}")
 
 print("\n[CP2 complete]\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 4 — Logistic regression
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("=" * 68)
+print("SECTION 4 — Logistic regression")
+print("=" * 68)
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score
+from sklearn.calibration import calibration_curve
+
+scaler   = StandardScaler()
+X_tr_s   = scaler.fit_transform(X_tr)
+X_te_s   = scaler.transform(X_te)
+
+lr = LogisticRegression(max_iter=1000, random_state=RNG_SEED)
+lr.fit(X_tr_s, y_tr)
+
+prob_tr = lr.predict_proba(X_tr_s)[:, 1]
+prob_te = lr.predict_proba(X_te_s)[:, 1]
+
+auc_tr = roc_auc_score(y_tr, prob_tr)
+auc_te = roc_auc_score(y_te, prob_te)
+
+# Bootstrap CI on test AUC
+boot_aucs = [
+    roc_auc_score(y_te[idx := rng.integers(0, len(y_te), len(y_te))], prob_te[idx])
+    for _ in range(N_BOOT)
+]
+auc_lo, auc_hi = np.percentile(boot_aucs, [2.5, 97.5])
+
+print(f"\nAUC  train : {auc_tr:.4f}")
+print(f"AUC  test  : {auc_te:.4f}  (OOS, time-split)")
+print(f"AUC  test  95% CI : [{auc_lo:.4f}, {auc_hi:.4f}]")
+
+# Coefficients ranked by absolute magnitude
+coef_order = np.argsort(np.abs(lr.coef_[0]))[::-1]
+print("\nCoefficients (standardised features), ranked by |coef|:")
+print(f"  {'Feature':<22s}  {'Coef':>8s}  {'OddsRatio':>10s}")
+print(f"  {'-'*22}  {'-'*8}  {'-'*10}")
+for i in coef_order:
+    print(f"  {FEATURE_NAMES[i]:<22s}  {lr.coef_[0][i]:>+8.4f}  {np.exp(lr.coef_[0][i]):>10.4f}")
+print(f"  {'intercept':<22s}  {lr.intercept_[0]:>+8.4f}")
+
+# Bootstrap CIs on coefficients
+boot_coefs = np.zeros((N_BOOT, len(FEATURE_NAMES)))
+lr_boot    = LogisticRegression(max_iter=1000, random_state=RNG_SEED)
+for b in range(N_BOOT):
+    idx = rng.integers(0, len(X_tr_s), len(X_tr_s))
+    try:
+        lr_boot.fit(X_tr_s[idx], y_tr[idx])
+        boot_coefs[b] = lr_boot.coef_[0]
+    except Exception:
+        boot_coefs[b] = np.nan
+
+coef_lo = np.nanpercentile(boot_coefs, 2.5,  axis=0)
+coef_hi = np.nanpercentile(boot_coefs, 97.5, axis=0)
+
+print("\nCoefficients with 95% bootstrap CIs:")
+print(f"  {'Feature':<22s}  {'Coef':>8s}  {'95% CI':<22s}  Sig")
+print(f"  {'-'*22}  {'-'*8}  {'-'*22}  ---")
+for i in coef_order:
+    sig = "**" if not (coef_lo[i] < 0 < coef_hi[i]) else ""
+    print(f"  {FEATURE_NAMES[i]:<22s}  {lr.coef_[0][i]:>+8.4f}"
+          f"  [{coef_lo[i]:>+.4f}, {coef_hi[i]:>+.4f}]  {sig}")
+
+# Calibration + coefficient plot
+frac_pos, mean_pred = calibration_curve(y_te, prob_te, n_bins=8, strategy="quantile")
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+
+ax = axes[0]
+ax.plot(mean_pred, frac_pos, "o-", color="steelblue", label="Logistic")
+ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="Perfect")
+ax.set_xlabel("Mean predicted probability")
+ax.set_ylabel("Fraction positive")
+ax.set_title("Calibration curve (test set)")
+ax.legend()
+
+ax = axes[1]
+colors = ["tomato" if c < 0 else "steelblue" for c in lr.coef_[0]]
+ax.barh(FEATURE_NAMES, lr.coef_[0], color=colors)
+ax.axvline(0, color="black", linewidth=0.8)
+ax.set_xlabel("Coefficient (standardised features)")
+ax.set_title("Logistic regression coefficients")
+
+plt.tight_layout()
+p = PLOTS_DIR / "02_logistic.png"
+fig.savefig(p, dpi=150)
+plt.close(fig)
+print(f"\nPlot saved: {p}")
+
+print("\n[CP3 complete]\n")
