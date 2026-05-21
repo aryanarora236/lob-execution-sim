@@ -349,3 +349,103 @@ plt.close(fig)
 print(f"\nPlot saved: {p}")
 
 print("\n[CP3 complete]\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 5 — LightGBM
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("=" * 68)
+print("SECTION 5 — LightGBM")
+print("=" * 68)
+
+import lightgbm as lgb
+
+lgb_params = dict(
+    objective="binary",
+    metric="auc",
+    n_estimators=300,
+    learning_rate=0.05,
+    num_leaves=15,          # shallow — prevents overfitting on small dataset
+    min_child_samples=30,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=RNG_SEED,
+    verbose=-1,
+)
+lgb_model = lgb.LGBMClassifier(**lgb_params)
+lgb_model.fit(
+    X_tr, y_tr,
+    eval_set=[(X_te, y_te)],
+    callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(period=-1)],
+)
+
+prob_lgb_tr = lgb_model.predict_proba(X_tr)[:, 1]
+prob_lgb_te = lgb_model.predict_proba(X_te)[:, 1]
+
+auc_lgb_tr = roc_auc_score(y_tr, prob_lgb_tr)
+auc_lgb_te = roc_auc_score(y_te, prob_lgb_te)
+
+boot_lgb = [
+    roc_auc_score(y_te[idx := rng.integers(0, len(y_te), len(y_te))], prob_lgb_te[idx])
+    for _ in range(N_BOOT)
+]
+lgb_lo, lgb_hi = np.percentile(boot_lgb, [2.5, 97.5])
+
+print(f"\nLightGBM AUC  train : {auc_lgb_tr:.4f}")
+print(f"LightGBM AUC  test  : {auc_lgb_te:.4f}  (OOS, time-split)")
+print(f"LightGBM AUC  test  95% CI : [{lgb_lo:.4f}, {lgb_hi:.4f}]")
+print(f"Best iteration      : {lgb_model.best_iteration_}")
+
+importances = lgb_model.feature_importances_
+imp_order   = np.argsort(importances)[::-1]
+print("\nLightGBM feature importances (gain):")
+for i in imp_order:
+    bar = "█" * int(importances[i] / max(importances) * 20)
+    print(f"  {FEATURE_NAMES[i]:<22s}  {importances[i]:>6.0f}  {bar}")
+
+# Calibration comparison
+frac_lgb, pred_lgb = calibration_curve(y_te, prob_lgb_te, n_bins=8, strategy="quantile")
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+ax = axes[0]
+ax.plot(mean_pred, frac_pos, "o-", color="steelblue", label="Logistic")
+ax.plot(pred_lgb,  frac_lgb, "s-", color="tomato",   label="LightGBM")
+ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="Perfect")
+ax.set_xlabel("Mean predicted probability")
+ax.set_ylabel("Fraction positive")
+ax.set_title("Calibration (test set)")
+ax.legend(fontsize=8)
+
+ax = axes[1]
+ax.barh([FEATURE_NAMES[i] for i in imp_order[::-1]],
+        [importances[i]    for i in imp_order[::-1]],
+        color="tomato", alpha=0.8)
+ax.set_xlabel("Importance (gain)")
+ax.set_title("LightGBM feature importances")
+
+ax = axes[2]
+models = ["Logistic\n(train)", "Logistic\n(test)", "LightGBM\n(train)", "LightGBM\n(test)"]
+aucs   = [auc_tr, auc_te, auc_lgb_tr, auc_lgb_te]
+bars   = ax.bar(models, aucs, color=["steelblue","steelblue","tomato","tomato"])
+for bar, alpha in zip(bars, [0.5, 1.0, 0.5, 1.0]):
+    bar.set_alpha(alpha)
+ax.axhline(0.5, color="black", linestyle="--", linewidth=0.8, label="Chance")
+ax.set_ylim(0.4, 0.75)
+ax.set_ylabel("AUC")
+ax.set_title("Model AUC comparison")
+ax.legend()
+
+plt.tight_layout()
+p = PLOTS_DIR / "03_lgbm.png"
+fig.savefig(p, dpi=150)
+plt.close(fig)
+print(f"\nPlot saved: {p}")
+
+gap = auc_lgb_te - auc_te
+if abs(gap) > 0.05:
+    print(f"\n⚠  LightGBM vs logistic test gap = {gap:+.3f} — investigate nonlinearity.")
+else:
+    print(f"\nOK: LightGBM vs logistic test gap = {gap:+.3f} (within ±0.05)")
+
+print("\n[CP4 complete]\n")
