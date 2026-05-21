@@ -134,10 +134,10 @@ def test_experiment_different_seeds_differ() -> None:
 
 @requires_data
 def test_experiment_parquet_written() -> None:
-    """A parquet file is written to out_dir after the run."""
+    """A parquet file is written to out_dir after the run, filename includes depth level."""
     with tempfile.TemporaryDirectory() as tmp:
-        run_experiment(n_injections=50, out_dir=tmp)
-        parquet_files = list(Path(tmp).glob("*.parquet"))
+        run_experiment(n_injections=50, depth_level=1, out_dir=tmp)
+        parquet_files = list(Path(tmp).glob("*_L1.parquet"))
         assert len(parquet_files) == 1
         assert parquet_files[0].stat().st_size > 0
 
@@ -149,3 +149,35 @@ def test_experiment_timestamps_within_day() -> None:
         df = run_experiment(n_injections=100, out_dir=tmp)
     assert (df["entry_timestamp"] >= _DAY_START).all()
     assert (df["entry_timestamp"] <= _DAY_END + 10).all()  # +10s tolerance for last event
+
+
+@requires_data
+def test_depth_level_2_lower_fill_rate() -> None:
+    """
+    Level-2 orders are deeper in the queue than level-1 — fill rate must be
+    strictly lower (level 2 is further from the touch).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        df1 = run_experiment(n_injections=200, depth_level=1, seed=42, out_dir=tmp)
+        df2 = run_experiment(n_injections=200, depth_level=2, seed=42, out_dir=tmp)
+    fill1 = df1["filled"].mean()
+    fill2 = df2["filled"].mean()
+    assert fill2 < fill1, (
+        f"Expected depth-2 fill rate ({fill2:.1%}) < depth-1 ({fill1:.1%})"
+    )
+
+
+@requires_data
+def test_depth_level_2_separate_parquet() -> None:
+    """depth_level=1 and depth_level=2 write to different parquet files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        run_experiment(n_injections=50, depth_level=1, out_dir=tmp)
+        run_experiment(n_injections=50, depth_level=2, out_dir=tmp)
+        parquet_files = list(Path(tmp).glob("*.parquet"))
+    assert len(parquet_files) == 2
+
+
+def test_depth_level_invalid() -> None:
+    """depth_level values other than 1 or 2 raise ValueError before any data loading."""
+    with pytest.raises(ValueError, match="depth_level"):
+        run_experiment(depth_level=3)

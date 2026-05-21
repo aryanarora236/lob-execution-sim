@@ -52,6 +52,7 @@ def run_experiment(
     lifetime: float = 60.0,
     seed: int = 42,
     out_dir: Path | str = Path("results"),
+    depth_level: int = 1,
 ) -> pl.DataFrame:
     """
     Replay one day's LOB, inject n_injections hypothetical orders, and return
@@ -61,17 +62,22 @@ def run_experiment(
     ----------
     data_dir        : directory containing the LOBSTER message CSV
     n_injections    : target number of injected orders (some may be skipped
-                      if top-of-book depth < min_queue_shares at target time)
-    min_queue_shares: minimum shares at the touch to accept an injection
+                      if the target level has depth < min_queue_shares)
+    min_queue_shares: minimum shares at the injection level to accept an order
     order_size      : size of each hypothetical order (shares)
     lifetime        : max seconds before an order expires unfilled
     seed            : RNG seed for target-timestamp generation
     out_dir         : directory for parquet output
+    depth_level     : 1 = inject at best price (touch); 2 = second-best price.
+                      Higher levels have smaller, more fragmented queues and
+                      lower fill rates — useful for testing granularity signal.
 
     Returns
     -------
     polars.DataFrame with one row per injected order
     """
+    if depth_level not in (1, 2):
+        raise ValueError(f"depth_level must be 1 or 2, got {depth_level}")
     data_dir = Path(data_dir)
     out_dir  = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -121,14 +127,29 @@ def run_experiment(
                 skipped += 1
                 continue
 
-            # Skip if top-of-book level is too thin
-            level_depth = bs if side == "bid" else as_
+            # Resolve injection price and available depth for the chosen level
+            if depth_level == 1:
+                price       = bp if side == "bid" else ap
+                level_depth = bs if side == "bid" else as_
+            else:
+                snap = book.snapshot(levels=2)
+                if side == "bid":
+                    price       = snap["bid_price_2"]
+                    level_depth = snap["bid_size_2"]
+                else:
+                    price       = snap["ask_price_2"]
+                    level_depth = snap["ask_size_2"]
+                # Level 2 may not exist (sentinel = -1)
+                if price == -1:
+                    ptr += 1
+                    skipped += 1
+                    continue
+
+            # Skip if the injection level is too thin
             if level_depth < min_queue_shares:
                 ptr += 1
                 skipped += 1
                 continue
-
-            price = bp if side == "bid" else ap
             order = HypotheticalOrder(
                 order_id=inj_id,
                 side=side,
@@ -162,7 +183,7 @@ def run_experiment(
     df = pl.DataFrame(rows)
 
     # ── save ──────────────────────────────────────────────────────────────────
-    fname = f"experiment_{meta['ticker']}_{meta['date']}.parquet"
+    fname = f"experiment_{meta['ticker']}_{meta['date']}_L{depth_level}.parquet"
     fpath = out_dir / fname
     df.write_parquet(fpath)
 
