@@ -111,8 +111,21 @@ different stock (smaller cap, wider spread) or a different regime.
 
 7. **Adverse selection R² is near-zero.** The OLS models explain <2% of variance in fill quality.
    The dominant signal is structural (time of day, direction of price drift on this specific day)
-   rather than predictive from observable queue state. A richer model with lagged OFI or
-   realized volatility might surface stronger predictors.
+   rather than predictive from observable queue state. A richer model with realized volatility
+   or signed trade flow might surface stronger predictors.
+
+8. **OFI is fully arbitraged at AAPL.** Short-window OFI (10s, 30s) adds no predictive power for
+   fill probability in AAPL. The signal likely exists but is absorbed by HFTs before a passive
+   resting order can benefit. A slower-trading, wider-spread stock would be the right testbed.
+
+### OFI as a fill predictor
+
+Source: `ofi_10s`, `ofi_30s` columns added to both parquets; analysis in `notebooks/07_ofi_fill.py`.
+
+- **OFI_10s mean:** +390 shares overall; filled orders have slightly higher OFI at L1 (+411 vs +354, Δ=+57) but slightly *lower* at L2 (+355 vs +421, Δ=−66).
+- **AUC: no improvement.** Adding OFI_10s + OFI_30s leaves OOS AUC unchanged at both levels (L1: 0.491→0.488; L2: 0.494→0.494). Neither OFI feature's bootstrap CI excludes zero.
+- **Sign × level interaction:** At L1, all order sides show a weak positive OFI→fill slope; at L2, passive asks show a weak *negative* slope (high buying pressure pushes price through L1 but prices out passive depth asks). The effect is ~3–6pp across OFI deciles and not significant.
+- **Interpretation:** In AAPL, short-window OFI is fully arbitraged by HFTs before it can inform a passive resting order's fill probability. OFI predicts *price direction* (Cont et al. 2014) but fill probability depends on whether the move *continues* — which is not predictable from a fixed lookback at the touch.
 
 ## What I'd do with more time
 

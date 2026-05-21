@@ -32,10 +32,12 @@ import random
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
 
 from lob_sim.explore import find_lobster_pair, load_messages, parse_filename_meta
 from lob_sim.injection import HypotheticalOrder, InjectionSimulator
+from lob_sim.ofi import compute_ofi, windowed_ofi
 from lob_sim.orderbook import LimitOrderBook
 
 # Trading-day boundaries (seconds since midnight)
@@ -108,6 +110,13 @@ def run_experiment(
     skipped = 0
     ptr = 0   # index into targets
 
+    # Accumulate best-bid/ask state after each event for OFI computation.
+    _snap_ts:  list[float] = []
+    _snap_bp:  list[int]   = []
+    _snap_bs:  list[int]   = []
+    _snap_ap:  list[int]   = []
+    _snap_as:  list[int]   = []
+
     for event in messages.iter_rows(named=True):
         ts = float(event["time"])
 
@@ -164,6 +173,24 @@ def run_experiment(
 
         sim.process_event(event)
 
+        # Record best-bid/ask after this event for OFI series.
+        _bp, _bs, _ap, _as = book.top_of_book()
+        _snap_ts.append(ts)
+        _snap_bp.append(_bp)
+        _snap_bs.append(_bs)
+        _snap_ap.append(_ap)
+        _snap_as.append(_as)
+
+    # ── compute OFI series ────────────────────────────────────────────────────
+    snap_ts  = np.array(_snap_ts,  dtype=float)
+    ofi_vals = compute_ofi(
+        np.array(_snap_bp, dtype=float),
+        np.array(_snap_bs, dtype=float),
+        np.array(_snap_ap, dtype=float),
+        np.array(_snap_as, dtype=float),
+    )
+    ofi_cum = np.cumsum(ofi_vals)
+
     # ── collect outcomes ──────────────────────────────────────────────────────
     rows: list[dict[str, Any]] = []
     for order in injected_orders:
@@ -177,6 +204,8 @@ def run_experiment(
             "price":           order.price,
             "order_size":      order.size,
             "status":          order.status,
+            "ofi_10s":         windowed_ofi(snap_ts, ofi_cum, order.entry_timestamp, 10.0),
+            "ofi_30s":         windowed_ofi(snap_ts, ofi_cum, order.entry_timestamp, 30.0),
             **out,
         })
 
