@@ -522,3 +522,201 @@ if not any_sig:
     print("    (none)")
 
 print("\n[CP5 complete]\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 7 — Depth-2 analysis (second-best price level)
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("=" * 68)
+print("SECTION 7 — Depth-2 analysis")
+print("=" * 68)
+
+PARQUET_L2 = Path("results/experiment_AAPL_2019-12-30_L2.parquet")
+df2 = pl.read_parquet(PARQUET_L2)
+print(f"\nL2 rows  : {len(df2):,}")
+
+filled2    = df2["filled"].to_numpy().astype(float)
+fill_rate2 = filled2.mean()
+lo2a, hi2a = bootstrap_ci(filled2, np.mean)
+print(f"L2 fill rate : {fill_rate2:.1%}  95% CI [{lo2a:.1%}, {hi2a:.1%}]")
+
+gran2  = df2["queue_granularity_at_entry"].to_numpy()
+spread2 = df2["spread_at_entry_ticks"].to_numpy()
+print(f"L2 granularity: mean={gran2.mean():.5f}  std={gran2.std():.5f}  max={gran2.max():.5f}")
+print(f"L2 spread     : min={spread2.min()}  med={np.median(spread2):.0f}  max={spread2.max()}")
+
+# Granularity bins at L2
+print("\nL2 fill rate by granularity bin:")
+gran_bins2  = [0, 0.005, 0.01, 0.02, 0.05, np.inf]
+gran_labs2  = ["<0.005", "0.005–0.01", "0.01–0.02", "0.02–0.05", ">0.05"]
+for lo_e, hi_e, lbl in zip(gran_bins2[:-1], gran_bins2[1:], gran_labs2):
+    mask = (gran2 >= lo_e) & (gran2 < hi_e)
+    if mask.sum() < 5:
+        continue
+    sr = filled2[mask].mean()
+    lo_c, hi_c = bootstrap_ci(filled2[mask], np.mean)
+    print(f"  {lbl:<12s}: fill={sr:.1%}  [{lo_c:.1%}, {hi_c:.1%}]  n={mask.sum():,}")
+
+# ── L2 models ─────────────────────────────────────────────────────────────────
+
+ts2     = df2["entry_timestamp"].to_numpy()
+day_lo2 = ts2.min(); day_hi2 = ts2.max()
+cutoff2 = day_lo2 + 0.8 * (day_hi2 - day_lo2)
+
+X2 = np.column_stack([
+    gran2,
+    np.log1p(df2["queue_position_at_entry"].to_numpy()),
+    spread2.astype(float),
+    df2["book_imbalance_at_entry"].to_numpy(),
+    (df2["side"] == "bid").to_numpy().astype(float),
+    (ts2 - day_lo2) / (day_hi2 - day_lo2),
+])
+y2 = df2["filled"].to_numpy().astype(int)
+
+tr2 = ts2 <= cutoff2; te2 = ts2 > cutoff2
+X2_tr, y2_tr = X2[tr2], y2[tr2]
+X2_te, y2_te = X2[te2], y2[te2]
+print(f"\nL2 train: {tr2.sum():,}  test: {te2.sum():,}")
+
+scaler2   = StandardScaler()
+X2_tr_s   = scaler2.fit_transform(X2_tr)
+X2_te_s   = scaler2.transform(X2_te)
+
+lr2 = LogisticRegression(max_iter=1000, random_state=RNG_SEED)
+lr2.fit(X2_tr_s, y2_tr)
+prob2_te  = lr2.predict_proba(X2_te_s)[:, 1]
+auc2_tr   = roc_auc_score(y2_tr, lr2.predict_proba(X2_tr_s)[:, 1])
+auc2_te   = roc_auc_score(y2_te, prob2_te)
+boot2_lr  = [roc_auc_score(y2_te[i := rng.integers(0, len(y2_te), len(y2_te))], prob2_te[i])
+             for _ in range(N_BOOT)]
+auc2_lo, auc2_hi = np.percentile(boot2_lr, [2.5, 97.5])
+print(f"\nL2 Logistic AUC  train: {auc2_tr:.4f}  test: {auc2_te:.4f}  CI [{auc2_lo:.4f}, {auc2_hi:.4f}]")
+
+lgb2 = lgb.LGBMClassifier(**lgb_params)
+lgb2.fit(X2_tr, y2_tr,
+         eval_set=[(X2_te, y2_te)],
+         callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(period=-1)])
+prob2_lgb_te  = lgb2.predict_proba(X2_te)[:, 1]
+auc2_lgb_tr   = roc_auc_score(y2_tr, lgb2.predict_proba(X2_tr)[:, 1])
+auc2_lgb_te   = roc_auc_score(y2_te, prob2_lgb_te)
+boot2_lgb     = [roc_auc_score(y2_te[i := rng.integers(0, len(y2_te), len(y2_te))], prob2_lgb_te[i])
+                 for _ in range(N_BOOT)]
+auc2_lgb_lo, auc2_lgb_hi = np.percentile(boot2_lgb, [2.5, 97.5])
+print(f"L2 LightGBM  AUC  train: {auc2_lgb_tr:.4f}  test: {auc2_lgb_te:.4f}  CI [{auc2_lgb_lo:.4f}, {auc2_lgb_hi:.4f}]")
+
+imp2 = lgb2.feature_importances_
+print("\nL2 LightGBM feature importances (gain):")
+for i in np.argsort(imp2)[::-1]:
+    bar = "█" * int(imp2[i] / max(imp2) * 20)
+    print(f"  {FEATURE_NAMES[i]:<22s}  {imp2[i]:>6.0f}  {bar}")
+
+# L2 logistic coefficients with bootstrap CIs
+boot2_coefs = np.zeros((N_BOOT, len(FEATURE_NAMES)))
+lr2_boot    = LogisticRegression(max_iter=1000, random_state=RNG_SEED)
+for b in range(N_BOOT):
+    idx = rng.integers(0, len(X2_tr_s), len(X2_tr_s))
+    try:
+        lr2_boot.fit(X2_tr_s[idx], y2_tr[idx])
+        boot2_coefs[b] = lr2_boot.coef_[0]
+    except Exception:
+        boot2_coefs[b] = np.nan
+c2_lo = np.nanpercentile(boot2_coefs, 2.5,  axis=0)
+c2_hi = np.nanpercentile(boot2_coefs, 97.5, axis=0)
+coef2_order = np.argsort(np.abs(lr2.coef_[0]))[::-1]
+print("\nL2 Logistic coefficients with 95% bootstrap CIs:")
+print(f"  {'Feature':<22s}  {'Coef':>8s}  {'95% CI':<22s}  Sig")
+print(f"  {'-'*22}  {'-'*8}  {'-'*22}  ---")
+for i in coef2_order:
+    sig = "**" if not (c2_lo[i] < 0 < c2_hi[i]) else ""
+    print(f"  {FEATURE_NAMES[i]:<22s}  {lr2.coef_[0][i]:>+8.4f}"
+          f"  [{c2_lo[i]:>+.4f}, {c2_hi[i]:>+.4f}]  {sig}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 8 — L1 vs L2 comparison plots
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("\n" + "=" * 68)
+print("SECTION 8 — L1 vs L2 comparison")
+print("=" * 68)
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+# AUC comparison
+ax = axes[0]
+labels_cmp = ["LR\nL1", "LR\nL2", "LGB\nL1", "LGB\nL2"]
+aucs_cmp   = [auc_te, auc2_te, auc_lgb_te, auc2_lgb_te]
+cis_cmp    = [(auc_lo, auc_hi), (auc2_lo, auc2_hi),
+              (lgb_lo, lgb_hi), (auc2_lgb_lo, auc2_lgb_hi)]
+colors_cmp = ["steelblue", "cornflowerblue", "tomato", "salmon"]
+bars = ax.bar(labels_cmp, aucs_cmp, color=colors_cmp, alpha=0.85)
+ax.errorbar(range(4), aucs_cmp,
+            yerr=[[a - l for a, (l, h) in zip(aucs_cmp, cis_cmp)],
+                  [h - a for a, (l, h) in zip(aucs_cmp, cis_cmp)]],
+            fmt="none", color="black", capsize=4)
+ax.axhline(0.5, color="black", linestyle="--", linewidth=0.8)
+ax.set_ylim(0.4, 0.7)
+ax.set_ylabel("OOS AUC (test set)")
+ax.set_title("OOS AUC: L1 vs L2")
+
+# Granularity distribution comparison
+ax = axes[1]
+ax.hist(gran,  bins=40, alpha=0.6, color="steelblue", label="L1 (touch)",  density=True)
+ax.hist(gran2, bins=40, alpha=0.6, color="tomato",    label="L2 (depth-2)", density=True)
+ax.set_xlabel("Queue granularity (K/Q)")
+ax.set_ylabel("Density")
+ax.set_title("Granularity distribution: L1 vs L2")
+ax.legend(fontsize=8)
+
+# Fill rate by granularity bin — both levels
+ax = axes[2]
+bins_plot  = [0, 0.005, 0.01, 0.02, np.inf]
+bin_labels = ["<0.005", "0.005–\n0.01", "0.01–\n0.02", ">0.02"]
+x = np.arange(len(bin_labels))
+w = 0.35
+for offset, dat_filled, dat_gran, color, lbl in [
+    (-w/2, filled,  gran,  "steelblue", "L1"),
+    ( w/2, filled2, gran2, "tomato",    "L2"),
+]:
+    ms, ls, hs = [], [], []
+    for lo_e, hi_e in zip(bins_plot[:-1], bins_plot[1:]):
+        mask = (dat_gran >= lo_e) & (dat_gran < hi_e)
+        if mask.sum() < 5:
+            ms.append(np.nan); ls.append(np.nan); hs.append(np.nan)
+            continue
+        m = dat_filled[mask].mean()
+        l, h = bootstrap_ci(dat_filled[mask], np.mean)
+        ms.append(m); ls.append(l); hs.append(h)
+    ms_a = np.array(ms); ls_a = np.array(ls); hs_a = np.array(hs)
+    valid = ~np.isnan(ms_a)
+    ax.bar(x[valid] + offset, ms_a[valid], w, color=color, alpha=0.8, label=lbl)
+    ax.errorbar(x[valid] + offset, ms_a[valid],
+                yerr=[ms_a[valid]-ls_a[valid], hs_a[valid]-ms_a[valid]],
+                fmt="none", color="black", capsize=3)
+ax.set_xticks(x); ax.set_xticklabels(bin_labels, fontsize=8)
+ax.set_ylabel("Fill rate within 60s")
+ax.set_title("Fill rate by granularity bin")
+ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
+ax.legend(fontsize=8)
+
+plt.tight_layout()
+p = PLOTS_DIR / "05_l1_vs_l2.png"
+fig.savefig(p, dpi=150)
+plt.close(fig)
+print(f"\nPlot saved: {p}")
+
+print("\n" + "─" * 68)
+print("Final comparison: L1 (touch) vs L2 (depth-2)")
+print("─" * 68)
+print(f"  {'Metric':<30s}  {'L1':>8s}  {'L2':>8s}")
+print(f"  {'-'*30}  {'-'*8}  {'-'*8}")
+print(f"  {'Fill rate':<30s}  {filled.mean():>8.1%}  {filled2.mean():>8.1%}")
+print(f"  {'Median granularity':<30s}  {np.median(gran):>8.5f}  {np.median(gran2):>8.5f}")
+print(f"  {'Max granularity':<30s}  {gran.max():>8.5f}  {gran2.max():>8.5f}")
+print(f"  {'Logistic OOS AUC':<30s}  {auc_te:>8.4f}  {auc2_te:>8.4f}")
+print(f"  {'LightGBM OOS AUC':<30s}  {auc_lgb_te:>8.4f}  {auc2_lgb_te:>8.4f}")
+
+sig_l1 = [FEATURE_NAMES[i] for i in coef_order  if not (coef_lo[i]  < 0 < coef_hi[i])]
+sig_l2 = [FEATURE_NAMES[i] for i in coef2_order if not (c2_lo[i]    < 0 < c2_hi[i])]
+print(f"  {'Sig. predictors (logistic)':<30s}  {str(sig_l1):>8s}  {str(sig_l2)}")
+
+print("\n[CP3/depth-2 complete]\n")

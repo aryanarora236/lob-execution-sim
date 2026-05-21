@@ -19,10 +19,11 @@ import polars as pl
 from lob_sim.experiment import run_experiment
 
 N_INJECTIONS  = 5_000
-MIN_QUEUE     = 100     # skip levels with < 100 shares at touch
+MIN_QUEUE     = 100     # skip levels with < 100 shares at injection level
 ORDER_SIZE    = 100     # shares per hypothetical order
 LIFETIME      = 60.0    # seconds before expiry
 SEED          = 42
+DEPTH_LEVEL   = 2       # 1 = touch, 2 = second-best price level
 
 
 def main() -> None:
@@ -34,6 +35,7 @@ def main() -> None:
         lifetime=LIFETIME,
         seed=SEED,
         out_dir=Path("results"),
+        depth_level=DEPTH_LEVEL,
     )
 
     filled   = df.filter(pl.col("filled"))
