@@ -198,3 +198,58 @@ plt.close(fig)
 print(f"\nPlot saved: {p}")
 
 print("\n[CP1 complete]\n")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Section 3 — Feature engineering and time-based train/test split
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("=" * 68)
+print("SECTION 3 — Feature engineering and train/test split")
+print("=" * 68)
+
+from scipy.stats import spearmanr  # type: ignore[import]
+
+ts       = df["entry_timestamp"].to_numpy()
+day_lo   = ts.min()
+day_hi   = ts.max()
+cutoff   = day_lo + 0.8 * (day_hi - day_lo)
+
+print(f"\nDay range            : {day_lo:.0f}s – {day_hi:.0f}s")
+print(f"Train/test cutoff    : {cutoff:.0f}s  "
+      f"({int(cutoff//3600):02d}:{int((cutoff%3600)//60):02d})")
+
+X = np.column_stack([
+    df["queue_granularity_at_entry"].to_numpy(),           # main IV
+    np.log1p(df["queue_position_at_entry"].to_numpy()),    # log queue shares (control)
+    df["spread_at_entry_ticks"].to_numpy().astype(float),
+    df["book_imbalance_at_entry"].to_numpy(),
+    (df["side"] == "bid").to_numpy().astype(float),        # side dummy
+    (ts - day_lo) / (day_hi - day_lo),                     # normalised time of day
+])
+FEATURE_NAMES = [
+    "granularity",
+    "log_queue_shares",
+    "spread_ticks",
+    "imbalance",
+    "side_bid",
+    "time_frac",
+]
+y = df["filled"].to_numpy().astype(int)
+
+train_mask = ts <= cutoff
+test_mask  = ts  > cutoff
+
+X_tr, y_tr = X[train_mask], y[train_mask]
+X_te, y_te = X[test_mask],  y[test_mask]
+
+print(f"\nTrain : {train_mask.sum():,} rows  ({y_tr.mean():.1%} fill rate)")
+print(f"Test  : {test_mask.sum():,}  rows  ({y_te.mean():.1%} fill rate)")
+print(f"\nFeatures: {FEATURE_NAMES}")
+
+print("\nSpearman correlation with filled (all data):")
+for i, name in enumerate(FEATURE_NAMES):
+    r, p = spearmanr(X[:, i], y)
+    sig = "**" if p < 0.01 else ("*" if p < 0.05 else "  ")
+    print(f"  {name:<20s}  r={r:+.4f}  p={p:.4f} {sig}")
+
+print("\n[CP2 complete]\n")
