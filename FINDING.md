@@ -135,15 +135,27 @@ Source: `ofi_10s`, `ofi_30s` columns added to both parquets; analysis in `notebo
    fragmented depth queues — the regime where K/Q actually varies and the
    granularity hypothesis has power.
 
-2. **Survival analysis on time-to-fill.** Replace the binary outcome with a
-   Cox model on time-to-fill, treating expired orders as right-censored. This
-   recovers fill-speed information and allows testing whether K/Q predicts the
-   *rate* of queue drain (the original theoretical claim) rather than the
-   binary outcome.
+2. **Survival analysis on time-to-fill.** *(Done — see below)*
 
-3. **Add order flow imbalance (OFI) as a feature.** OFI — the net signed
-   execution volume in a short pre-injection window — is the strongest
-   short-term predictor in empirical microstructure (Cont et al. 2014). Adding
-   it would likely increase OOS AUC substantially and provide a cleaner
-   baseline against which to measure the marginal contribution of queue
-   structure variables.
+3. **Add order flow imbalance (OFI) as a feature.** *(Done — null result at both levels)*
+
+### Survival analysis (Cox proportional hazards)
+
+Source: `notebooks/08_survival.py`
+
+- **Median fill time:** L1 = **9.1 s**, L2 = **12.2 s** — depth orders take 34% longer when they fill.
+- **Log-rank test (narrow vs wide spread):** L1 p=0.31 (not significant); L2 p=0.032 (significant) — spread predicts fill speed at depth but not at the touch.
+- **Cox C-index:** L1 = 0.528 in-sample, 0.506 OOS; L2 = 0.545 in-sample, 0.500 OOS. Same degradation pattern as logistic AUC.
+- **Significant Cox predictors at L2** (all p < 0.05):
+
+  | Feature       | HR     | p-value    | Interpretation                        |
+  |---------------|--------|------------|---------------------------------------|
+  | `side_bid`    | 0.899  | 6 × 10⁻⁸  | Bids fill 10% more slowly             |
+  | `spread_ticks`| 0.915  | 3 × 10⁻⁵  | Wider spread → slower fill            |
+  | `time_frac`   | 0.954  | 0.026      | Earlier in day → faster fill          |
+  | `imbalance`   | 0.957  | 0.028      | Higher imbalance → slower fill        |
+
+- **At L1:** only `spread_ticks` significant (HR=0.946, p=0.006). Same as logistic.
+- **Granularity null** at both levels (L2: HR=1.025, p=0.19).
+- **OFI_10s null** at both levels (L2: p=0.26). Consistent with logistic result.
+- **Interpretation:** The survival model confirms the logistic findings with a richer framework. The same four features that predict *whether* a depth order fills also predict *how fast* it fills — with consistent signs and similar magnitudes. The Cox framework adds the finding that spread is significant at L1 for fill *speed* even though it was only marginal in the binary model.
