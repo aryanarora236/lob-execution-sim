@@ -159,3 +159,24 @@ Source: `notebooks/08_survival.py`
 - **Granularity null** at both levels (L2: HR=1.025, p=0.19).
 - **OFI_10s null** at both levels (L2: p=0.26). Consistent with logistic result.
 - **Interpretation:** The survival model confirms the logistic findings with a richer framework. The same four features that predict *whether* a depth order fills also predict *how fast* it fills — with consistent signs and similar magnitudes. The Cox framework adds the finding that spread is significant at L1 for fill *speed* even though it was only marginal in the binary model.
+
+### Optimal passive placement
+
+Source: `notebooks/09_optimal_placement.py`
+
+**Framework:** Expected implementation shortfall (IS) per share in cents:
+
+    E[IS | L1] = p1 × (−S + AS1) + (1 − p1) × C
+    E[IS | L2] = p2 × (−S − 1¢ + AS2) + (1 − p2) × C
+
+where S = half-spread, AS = mean adverse selection, C = unfill penalty (cost of market-order fallback).
+
+**Key result — crossover at C\* = 8¢/share:**
+
+| Spread | C\* (crossover) | Below C\*: prefer | Above C\*: prefer |
+|--------|-----------------|-------------------|-------------------|
+| 1-tick | 7.7¢            | L2                | L1                |
+| 2-tick | 9.8¢            | L2                | L1                |
+| 3-tick | 8.3¢            | L2                | L1                |
+
+**Interpretation:** L2 is the superior passive strategy unless the market-order fallback exceeds ~8¢/share (~5 bps for AAPL at $150). The extra 1-cent price improvement from posting one tick deeper outweighs the 8pp lower fill rate for all realistic unfill penalties faced by a patient trader. Only when execution urgency is high (alpha decays fast, or hedging requires certainty of fill) does L1 dominate. At C=10¢, ~69% of spread × imbalance conditions flip to L1 — concentrated in the wide-imbalance, narrow-spread regime where missing a fill is most costly.
