@@ -127,6 +127,27 @@ Source: `ofi_10s`, `ofi_30s` columns added to both parquets; analysis in `notebo
 - **Sign × level interaction:** At L1, all order sides show a weak positive OFI→fill slope; at L2, passive asks show a weak *negative* slope (high buying pressure pushes price through L1 but prices out passive depth asks). The effect is ~3–6pp across OFI deciles and not significant.
 - **Interpretation:** In AAPL, short-window OFI is fully arbitraged by HFTs before it can inform a passive resting order's fill probability. OFI predicts *price direction* (Cont et al. 2014) but fill probability depends on whether the move *continues* — which is not predictable from a fixed lookback at the touch.
 
+### Fill speed and adverse selection are independent
+
+Source: `notebooks/10_deep_angles.py`
+
+Spearman ρ between time-to-fill and adverse selection: L1 = +0.001 (p=0.96), L2 = −0.006 (p=0.78). After controlling for side, spread, and time of day, the coefficient on fill speed is −0.04¢ (L1) and −0.06¢ (L2) — both negligible. Being filled in 2 seconds is not meaningfully worse quality than being filled in 55 seconds. **In AAPL, execution speed and execution quality are orthogonal.** This contradicts the intuition that fast fills signal informed counterparties — in a liquid HFT-dominated market, the adversity is structural (time of day, price drift direction) not counterparty-driven.
+
+### LightGBM's edge is time-of-day at L2, book-state at L1
+
+Source: `notebooks/10_deep_angles.py`
+
+| | LightGBM full AUC | Without `time_frac` | Drop | % of edge |
+|---|---|---|---|---|
+| L1 | 0.541 | 0.539 | −0.002 | ~5% |
+| L2 | 0.524 | 0.492 | −0.032 | >100% |
+
+**At L1:** Removing time_frac barely moves AUC. The tree's modest advantage over logistic comes from weak nonlinear interactions in other book-state features. There is a small genuine book-state signal at the touch beyond time of day.
+
+**At L2:** Removing time_frac collapses AUC below chance. The entire LightGBM edge at depth was learning that fill rates differ morning vs afternoon — a structural temporal pattern, not a tradeable book-state signal. After stripping time of day, observable book state has zero predictive power for depth fills.
+
+**Implication:** The only exploitable signal for depth fill prediction is time of day. All other features — spread, imbalance, queue size, OFI — add nothing once the intraday fill-rate profile is accounted for. An optimal passive execution algorithm at L2 should condition primarily on time of day when estimating fill probability, not on real-time book state.
+
 ## What I'd do with more time
 
 1. **Multi-stock panel across spread regimes.** Run the same experiment on
