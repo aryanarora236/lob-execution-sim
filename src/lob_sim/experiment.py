@@ -35,7 +35,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from lob_sim.explore import find_lobster_pair, load_messages, parse_filename_meta
+from lob_sim.explore import find_all_lobster_pairs, load_messages, parse_filename_meta
 from lob_sim.injection import HypotheticalOrder, InjectionSimulator
 from lob_sim.ofi import compute_ofi, windowed_ofi
 from lob_sim.orderbook import LimitOrderBook
@@ -47,7 +47,7 @@ _DAY_END   = 57_300   # 15:55
 
 
 def run_experiment(
-    data_dir: Path | str = Path("data/raw"),
+    msg_path: Path | str,
     n_injections: int = 5_000,
     min_queue_shares: int = 100,
     order_size: int = 100,
@@ -62,7 +62,7 @@ def run_experiment(
 
     Parameters
     ----------
-    data_dir        : directory containing the LOBSTER message CSV
+    msg_path        : path to the LOBSTER message CSV (orderbook CSV inferred)
     n_injections    : target number of injected orders (some may be skipped
                       if the target level has depth < min_queue_shares)
     min_queue_shares: minimum shares at the injection level to accept an order
@@ -80,12 +80,11 @@ def run_experiment(
     """
     if depth_level not in (1, 2):
         raise ValueError(f"depth_level must be 1 or 2, got {depth_level}")
-    data_dir = Path(data_dir)
+    msg_path = Path(msg_path)
     out_dir  = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── load messages ─────────────────────────────────────────────────────────
-    msg_path, _ = find_lobster_pair(data_dir)
     meta     = parse_filename_meta(msg_path)
     messages = load_messages(msg_path)
     print(f"Loaded {len(messages):,} events from {msg_path.name}")
@@ -226,3 +225,51 @@ def run_experiment(
         f"\n  output   : {fpath}"
     )
     return df
+
+
+def run_all_experiments(
+    data_dir: Path | str = Path("data/raw"),
+    n_injections: int = 5_000,
+    min_queue_shares: int = 100,
+    order_size: int = 100,
+    lifetime: float = 60.0,
+    seed: int = 42,
+    out_dir: Path | str = Path("results"),
+    depth_level: int = 1,
+) -> pl.DataFrame:
+    """
+    Run run_experiment for every LOBSTER message file found in data_dir and
+    return the pooled DataFrame (all tickers and dates concatenated).
+
+    Individual per-file parquets are written to out_dir as before.
+    A combined parquet is written to out_dir/experiment_all_L{depth_level}.parquet.
+    """
+    data_dir = Path(data_dir)
+    out_dir  = Path(out_dir)
+    pairs = find_all_lobster_pairs(data_dir)
+    if not pairs:
+        raise FileNotFoundError(f"No LOBSTER pairs found in {data_dir}")
+
+    frames: list[pl.DataFrame] = []
+    for msg_path, _ in pairs:
+        meta = parse_filename_meta(msg_path)
+        print(f"\n{'='*60}")
+        print(f"Running: {meta['ticker']}  {meta['date']}")
+        print(f"{'='*60}")
+        df = run_experiment(
+            msg_path=msg_path,
+            n_injections=n_injections,
+            min_queue_shares=min_queue_shares,
+            order_size=order_size,
+            lifetime=lifetime,
+            seed=seed,
+            out_dir=out_dir,
+            depth_level=depth_level,
+        )
+        frames.append(df)
+
+    pooled = pl.concat(frames)
+    pool_path = out_dir / f"experiment_all_L{depth_level}.parquet"
+    pooled.write_parquet(pool_path)
+    print(f"\nPooled {len(frames)} files → {len(pooled):,} rows → {pool_path}")
+    return pooled

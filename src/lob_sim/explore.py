@@ -43,17 +43,24 @@ PRICE_SCALE = 10_000  # LOBSTER stores price as integer; divide by 10000 for dol
 
 def find_lobster_pair(data_dir: Path) -> tuple[Path, Path]:
     """Return (message_file, orderbook_file) for the first LOBSTER pair found."""
-    msg_files = sorted(data_dir.glob("*_message_*.csv"))
-    if not msg_files:
+    pairs = find_all_lobster_pairs(data_dir)
+    if not pairs:
         raise FileNotFoundError(
             f"No LOBSTER message files found in {data_dir}.\n"
             "Expected pattern: TICKER_DATE_START_END_message_LEVELS.csv"
         )
-    msg = msg_files[0]
-    ob = Path(str(msg).replace("_message_", "_orderbook_"))
-    if not ob.exists():
-        raise FileNotFoundError(f"Orderbook file not found: {ob}")
-    return msg, ob
+    return pairs[0]
+
+
+def find_all_lobster_pairs(data_dir: Path) -> list[tuple[Path, Path]]:
+    """Return all (message_file, orderbook_file) pairs found in data_dir."""
+    msg_files = sorted(data_dir.glob("*_message_*.csv"))
+    pairs = []
+    for msg in msg_files:
+        ob = Path(str(msg).replace("_message_", "_orderbook_"))
+        if ob.exists():
+            pairs.append((msg, ob))
+    return pairs
 
 
 def parse_filename_meta(path: Path) -> dict[str, str]:

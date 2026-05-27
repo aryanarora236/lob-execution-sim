@@ -5,8 +5,10 @@ Streams the compressed binary feed, filters to a single ticker, and writes
 LOBSTER-compatible message and orderbook CSVs to an output directory.
 
 Usage:
-    uv run python -m lob_sim.itch_parser \
-        data/raw/12302019.NASDAQ_ITCH50.gz AAPL data/raw
+    # Extract one ticker (keep source for additional extractions):
+    uv run python -m lob_sim.itch_parser data/raw/10302019.NASDAQ_ITCH50.gz AAPL data/raw
+    uv run python -m lob_sim.itch_parser data/raw/10302019.NASDAQ_ITCH50.gz MSFT data/raw
+    uv run python -m lob_sim.itch_parser data/raw/10302019.NASDAQ_ITCH50.gz INTC data/raw --delete
 
 Spec: https://www.nasdaqtrader.com/content/technicalsupport/specifications/dataproducts/NQTVITCHspecification.pdf
 """
@@ -366,17 +368,24 @@ def parse_itch(
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python -m lob_sim.itch_parser <gz_file> <ticker> [out_dir] [levels]")
+        print("Usage: python -m lob_sim.itch_parser <gz_file> <ticker> [out_dir] [levels] [--delete]")
+        print("  --delete  remove the source .gz after parsing (use only after all tickers extracted)")
         sys.exit(1)
 
     gz = Path(sys.argv[1])
     tkr = sys.argv[2].upper()
-    out = Path(sys.argv[3]) if len(sys.argv) > 3 else gz.parent
-    lvl = int(sys.argv[4]) if len(sys.argv) > 4 else 10
+    args = sys.argv[3:]
+    delete_source = "--delete" in args
+    positional = [a for a in args if not a.startswith("--")]
+    out = Path(positional[0]) if len(positional) > 0 else gz.parent
+    lvl = int(positional[1]) if len(positional) > 1 else 10
 
     msg_p, ob_p = parse_itch(gz, tkr, out, lvl)
 
-    # delete the large source file
-    print(f"\nDeleting source file ({gz.stat().st_size / 1e9:.2f} GB)...")
-    gz.unlink()
-    print("Deleted.")
+    if delete_source:
+        print(f"\nDeleting source file ({gz.stat().st_size / 1e9:.2f} GB)...")
+        gz.unlink()
+        print("Deleted.")
+    else:
+        print(f"\nSource file kept at {gz} ({gz.stat().st_size / 1e9:.2f} GB).")
+        print("Re-run with --delete after all tickers are extracted.")

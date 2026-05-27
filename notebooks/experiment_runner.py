@@ -1,10 +1,12 @@
 """
-Full experiment run: 5 000 hypothetical orders injected across the AAPL day.
+Full experiment run: 5 000 hypothetical orders injected per ticker/date file.
 
+Scans data/raw for all LOBSTER message CSVs and runs the experiment for each.
 Run from project root:
     uv run python notebooks/experiment_runner.py
 
-Output: results/experiment_AAPL_<date>.parquet
+Output: results/experiment_<TICKER>_<date>_L{1,2}.parquet  (one per file)
+        results/experiment_all_L{1,2}.parquet               (pooled)
 """
 
 from __future__ import annotations
@@ -14,20 +16,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import os
+
 import polars as pl
 
-from lob_sim.experiment import run_experiment
+from lob_sim.experiment import run_all_experiments
 
 N_INJECTIONS  = 5_000
 MIN_QUEUE     = 100     # skip levels with < 100 shares at injection level
 ORDER_SIZE    = 100     # shares per hypothetical order
 LIFETIME      = 60.0    # seconds before expiry
 SEED          = 42
-DEPTH_LEVEL   = 2       # 1 = touch, 2 = second-best price level
+DEPTH_LEVEL   = int(os.environ.get("DEPTH_LEVEL", "2"))  # override: DEPTH_LEVEL=1 ./run.sh ...
 
 
 def main() -> None:
-    df = run_experiment(
+    df = run_all_experiments(
         data_dir=Path("data/raw"),
         n_injections=N_INJECTIONS,
         min_queue_shares=MIN_QUEUE,
