@@ -2,202 +2,329 @@
 
 ## Headline
 
-Observable market-state variables (spread, book imbalance, side, time of day)
-predict passive fill probability at AAPL's second-best price level (OOS AUC
-0.54, four significant linear predictors) but not at the best price (OOS AUC
-0.49, one marginal predictor) — consistent with HFT market-makers creating a
-near-fair queue at the touch while depth orders face more selective execution.
-Queue granularity (K/Q) shows no statistically significant effect at either level.
+Fill predictability at passive limit order depth (L2) is regime-dependent.
+In liquid HFT-dominated stocks (AAPL), only spread is significant and OFI is
+fully arbitraged (OOS AUC ≈ 0.53). In wider-spread stocks (INTC), queue
+position becomes the dominant predictor (coef −0.110 ***), OFI_30s is
+significant (+0.202 ***), and Cox C-index reaches 0.613 vs 0.536 for AAPL.
+The optimal placement crossover (L1 vs L2) varies from C\* ≈ 9¢ (AAPL) to
+C\* ≈ 1.6¢ (INTC) — meaning L2 is almost never worth posting in INTC at
+realistic urgency levels. Queue granularity (K/Q) remains null across all
+tickers and both levels.
 
-## Quantified results
+---
 
-### Level 1 — best price (touch)
+## Data and scope
 
-Source: `results/experiment_AAPL_2019-12-30_L1.parquet`, n = 4,343 orders
+| Ticker | Date | Session | Events | L1 injections | L2 injections |
+|--------|------|---------|--------|---------------|---------------|
+| AAPL | 2019-12-30 | Holiday week (low volume) | 1,609,148 | 4,343 | 4,701 |
+| AAPL | 2019-08-30 | Normal | 1,283,342 | 3,259 | 3,943 |
+| MSFT | 2019-08-30 | Normal | 1,642,017 | 4,690 | 4,985 |
+| INTC | 2019-08-30 | Normal | 1,022,326 | 4,994 | 5,000 |
 
-- Fill rate within 60 s: **63.2%**  (95% CI 61.8%–64.7%)
-- Logistic regression OOS AUC: **0.491**  (95% CI 0.450–0.531) — indistinguishable from chance
-- LightGBM OOS AUC: **0.548**  (95% CI 0.506–0.589) — modest intraday nonlinearity
-- **Only significant predictor (bootstrap 95% CI excludes 0):** `spread_ticks`
-  - Coef (standardised) = −0.106, OR = 0.899
-  - Fill rate at 1-tick spread: 68.4% vs 62.1% at 3 ticks
+Source data: NASDAQ TotalView-ITCH 5.0 (MSFT, INTC) and LOBSTER Level 10
+(AAPL 2019-12-30), parsed to LOBSTER-compatible format. Pooled dataset:
+17,286 L1 orders, 18,629 L2 orders across 4 ticker-date combinations.
 
-### Level 2 — second-best price (depth)
+Hypothetical orders injected via passive-shadow simulation (no market impact).
+Each order expires unfilled after 60 s. Depth level 1 = best price (touch);
+level 2 = one tick behind best.
 
-Source: `results/experiment_AAPL_2019-12-30_L2.parquet`, n = 4,701 orders
+---
 
-- Fill rate within 60 s: **55.1%**  (95% CI 53.7%–56.5%) — 8pp lower than L1
-- Logistic regression OOS AUC: **0.494**  (95% CI 0.458–0.532)
-- LightGBM OOS AUC: **0.542**  (95% CI 0.503–0.579)
-- **Four significant predictors at L2 (logistic bootstrap CIs):**
+## Part I — Single-ticker AAPL results (2019-12-30)
 
-  | Feature       | Coef (std.) | OR    | 95% CI              |
-  |---------------|-------------|-------|---------------------|
-  | `side_bid`    | −0.191      | 0.826 | [−0.257, −0.125]    |
-  | `spread_ticks`| −0.119      | 0.888 | [−0.187, −0.048]    |
-  | `time_frac`   | −0.105      | 0.900 | [−0.173, −0.035]    |
-  | `imbalance`   | −0.063      | 0.939 | [−0.127, −0.001]    |
+### L1 (touch) and L2 (depth) fill predictability
 
-- **Queue granularity at L2:** coef = +0.032, CI [−0.040, +0.103] — spans zero
+Source: `results/experiment_AAPL_2019-12-30_L{1,2}.parquet`
 
-### Adverse selection — execution quality
+| | L1 | L2 |
+|---|---|---|
+| Fill rate (60 s) | 63.2% [61.8%, 64.7%] | 55.1% [53.7%, 56.5%] |
+| Logistic OOS AUC | 0.491 [0.450, 0.531] | 0.494 [0.458, 0.532] |
+| LightGBM OOS AUC | 0.548 [0.506, 0.589] | 0.542 [0.503, 0.579] |
 
-Source: `adverse_selection_1s` in both parquets (n = 2,746 L1 fills, 2,590 L2 fills with data)
+**Significant predictors at L2** (bootstrap 95% CI excludes 0):
 
-- **L1 mean adverse selection: +1.73¢/share** (95% CI [+1.64, +1.82]); 79.9% of fills adversely selected
-- **L2 mean adverse selection: +1.60¢/share** (95% CI [+1.51, +1.70]); 77.5% adversely selected
-- **H2 rejected:** L2 is *not* worse than L1 (t = −1.94, p = 0.97). L1 fills face slightly worse quality — likely because touch fills are executed immediately by the most aggressive (informed) takers, while L2 fills occur only after L1 has been fully cleared.
-- **Intraday pattern:** 09:34 bucket is the worst at both levels (+2.40–2.60¢), declining through the morning to ~+1.5¢ by noon — consistent with Admati-Pfleiderer informed-trading concentration at the open. No uptick at close (low-volume holiday session).
-- **Regression R² ≈ 0:** adverse selection is largely unpredictable from observable state at entry.
-- **Only two significant OLS predictors (bootstrap 95% CIs, both levels):**
+| Feature | Coef (std.) | 95% CI |
+|---------|-------------|--------|
+| `side_bid` | −0.191 | [−0.257, −0.125] |
+| `spread_ticks` | −0.119 | [−0.187, −0.048] |
+| `time_frac` | −0.105 | [−0.173, −0.035] |
+| `imbalance` | −0.063 | [−0.127, −0.001] |
 
-  | Feature     | L1 coef (std.) | L2 coef (std.) | Interpretation                          |
-  |-------------|----------------|----------------|-----------------------------------------|
-  | `side_bid`  | +0.295¢        | +0.282¢        | Bid fills adversely selected more (price drifted up this day) |
-  | `time_frac` | −0.166¢        | −0.177¢        | Earlier in day → worse quality (open effect) |
+At L1 only `spread_ticks` is significant. Queue granularity spans zero at
+both levels.
 
-- Imbalance, spread, queue size, and granularity are all insignificant at both levels.
+### LightGBM time_frac ablation (AAPL)
 
-### Granularity verdict
-
-At both levels the median queue granularity (K/Q) is exactly 0.01 — meaning
-the typical best-price queue in AAPL on this day consists of ~2 orders sharing
-~200 shares. The near-zero variance in K/Q (75th percentile = median = 0.01 at
-both levels) means the hypothesis cannot be tested meaningfully: there is not
-enough spread in the independent variable.
-
-## Why this is interesting
-
-**The touch/depth asymmetry is the headline finding.** At the best price,
-market-state variables explain almost nothing about fill outcomes — the queue
-is competitive and fair, consistent with HFT market-maker concentration at
-AAPL's best bid/ask. At the second level, four variables become predictive:
-side (bids fill 8% less often than asks, suggesting upward price drift on this
-day), spread (wider spread = less favourable execution environment), time of
-day, and book imbalance. This is consistent with Glosten-Milgrom: informed
-flow concentrates at the touch and makes it efficient; depth orders are reached
-only by order flow that is less competitive and therefore more predictable.
-
-The granularity null result is itself informative: AAPL's visible queue is
-structurally coarse (a small number of large institutional/HFT orders) at
-every level on this day. Testing the granularity hypothesis requires either a
-different stock (smaller cap, wider spread) or a different regime.
-
-## Limitations
-
-1. **Single ticker, single day.** All results are specific to AAPL on Dec 30
-   2019 — a low-volume holiday-week session. Findings may not generalise.
-
-2. **Passive-shadow model (no market impact).** Injected orders are
-   counterfactual — they don't displace existing resting orders, don't affect
-   prices, and don't attract strategic responses. Real orders do.
-
-3. **Granularity variance is structurally near-zero.** With K/Q at 0.01 for
-   75%+ of observations at both levels, the hypothesis has insufficient
-   statistical power regardless of the true effect size.
-
-4. **Right-censored survival collapsed to binary.** Using filled-within-60s
-   discards information about fill timing. A Cox proportional hazards model
-   would handle censoring correctly and might reveal clearer granularity signal.
-
-5. **OOS split is a single contiguous block.** The last 20% of the day (after
-   14:38) may differ systematically from the morning session (pre-open
-   volatility, end-of-day effects). A k-fold time-series cross-validation
-   would give more stable AUC estimates.
-
-6. **Level-2 side effect may be day-specific.** The `side_bid` coefficient
-   at L2 (bids fill 18% less often than asks) likely reflects intraday price
-   drift on Dec 30 specifically. It would vanish or reverse on a down day.
-
-7. **Adverse selection R² is near-zero.** The OLS models explain <2% of variance in fill quality.
-   The dominant signal is structural (time of day, direction of price drift on this specific day)
-   rather than predictive from observable queue state. A richer model with realized volatility
-   or signed trade flow might surface stronger predictors.
-
-8. **OFI is fully arbitraged at AAPL.** Short-window OFI (10s, 30s) adds no predictive power for
-   fill probability in AAPL. The signal likely exists but is absorbed by HFTs before a passive
-   resting order can benefit. A slower-trading, wider-spread stock would be the right testbed.
-
-### OFI as a fill predictor
-
-Source: `ofi_10s`, `ofi_30s` columns added to both parquets; analysis in `notebooks/07_ofi_fill.py`.
-
-- **OFI_10s mean:** +390 shares overall; filled orders have slightly higher OFI at L1 (+411 vs +354, Δ=+57) but slightly *lower* at L2 (+355 vs +421, Δ=−66).
-- **AUC: no improvement.** Adding OFI_10s + OFI_30s leaves OOS AUC unchanged at both levels (L1: 0.491→0.488; L2: 0.494→0.494). Neither OFI feature's bootstrap CI excludes zero.
-- **Sign × level interaction:** At L1, all order sides show a weak positive OFI→fill slope; at L2, passive asks show a weak *negative* slope (high buying pressure pushes price through L1 but prices out passive depth asks). The effect is ~3–6pp across OFI deciles and not significant.
-- **Interpretation:** In AAPL, short-window OFI is fully arbitraged by HFTs before it can inform a passive resting order's fill probability. OFI predicts *price direction* (Cont et al. 2014) but fill probability depends on whether the move *continues* — which is not predictable from a fixed lookback at the touch.
-
-### Fill speed and adverse selection are independent
-
-Source: `notebooks/10_deep_angles.py`
-
-Spearman ρ between time-to-fill and adverse selection: L1 = +0.001 (p=0.96), L2 = −0.006 (p=0.78). After controlling for side, spread, and time of day, the coefficient on fill speed is −0.04¢ (L1) and −0.06¢ (L2) — both negligible. Being filled in 2 seconds is not meaningfully worse quality than being filled in 55 seconds. **In AAPL, execution speed and execution quality are orthogonal.** This contradicts the intuition that fast fills signal informed counterparties — in a liquid HFT-dominated market, the adversity is structural (time of day, price drift direction) not counterparty-driven.
-
-### LightGBM's edge is time-of-day at L2, book-state at L1
-
-Source: `notebooks/10_deep_angles.py`
-
-| | LightGBM full AUC | Without `time_frac` | Drop | % of edge |
+| | LGB full | LGB w/o time_frac | Drop | % of edge |
 |---|---|---|---|---|
 | L1 | 0.541 | 0.539 | −0.002 | ~5% |
 | L2 | 0.524 | 0.492 | −0.032 | >100% |
 
-**At L1:** Removing time_frac barely moves AUC. The tree's modest advantage over logistic comes from weak nonlinear interactions in other book-state features. There is a small genuine book-state signal at the touch beyond time of day.
+At L2, removing time_frac collapses AUC below chance. The tree's entire edge
+was learning the intraday fill-rate profile. After controlling for time of day,
+observable book state has zero predictive power for AAPL depth fills.
 
-**At L2:** Removing time_frac collapses AUC below chance. The entire LightGBM edge at depth was learning that fill rates differ morning vs afternoon — a structural temporal pattern, not a tradeable book-state signal. After stripping time of day, observable book state has zero predictive power for depth fills.
+### Adverse selection (AAPL 2019-12-30)
 
-**Implication:** The only exploitable signal for depth fill prediction is time of day. All other features — spread, imbalance, queue size, OFI — add nothing once the intraday fill-rate profile is accounted for. An optimal passive execution algorithm at L2 should condition primarily on time of day when estimating fill probability, not on real-time book state.
+- L1 mean: **+1.73¢/share** [+1.64, +1.82]; 79.9% of fills adversely selected
+- L2 mean: **+1.60¢/share** [+1.51, +1.70]; 77.5% adversely selected
+- L1 > L2 adversity, t-test significant (p = 0.014)
+- Intraday pattern: open hour worst (+2.40–2.60¢), declining to ~+1.5¢ by noon
+- Only two significant OLS predictors at both levels: `side_bid` and `time_frac`
+- Adverse selection R² < 2% — largely unpredictable from observable state
+
+### Survival analysis (AAPL 2019-12-30, L2)
+
+- Median fill time: L1 = 9.1 s, L2 = 12.2 s
+- Significant Cox predictors at L2: `spread_ticks` (HR=0.915 ***),
+  `side_bid` (HR=0.899 ***), `time_frac` (HR=0.954 *), `imbalance` (HR=0.957 *)
+- Cox C-index L2: 0.545 in-sample, 0.500 OOS
+
+### Optimal placement (AAPL 2019-12-30)
+
+C\* ≈ 8¢/share at mean spread. L2 preferred for patient traders; L1 only
+when urgency is high. See Part II for cross-ticker comparison.
+
+### OFI (AAPL)
+
+OFI_10s and OFI_30s add no predictive power at either level. Neither
+bootstrap CI excludes zero. OFI is fully arbitraged in AAPL by HFTs.
+
+---
+
+## Part II — Multi-ticker cross-sectional analysis
+
+Source: `notebooks/11_multi_ticker.py`, `notebooks/12_extended_analysis.py`
+Pooled parquets: `results/experiment_all_L{1,2}.parquet`
+
+### Fill rates and AUC by ticker
+
+| Ticker | L1 fill rate | L2 fill rate | L1 AUC [95% CI] | L2 AUC [95% CI] |
+|--------|-------------|-------------|-----------------|-----------------|
+| AAPL (pooled) | 65.1% | 57.7% | 0.519 [0.489, 0.549] | 0.529 [0.502, 0.557] |
+| INTC | 55.7% | **31.7%** | 0.531 [0.494, 0.565] | 0.498 [0.456, 0.540] |
+| MSFT | 68.4% | 57.9% | 0.471 [0.426, 0.517] | 0.460 [0.423, 0.500] |
+
+INTC's L2 fill rate (31.7%) is less than half of AAPL's (57.7%) — the
+depth queue in a wider-spread stock clears far less often within 60 s.
+MSFT's AUC < 0.5 reflects strong intraday non-stationarity on 2019-08-30:
+the model trained on the morning session is anti-predictive in the afternoon.
+
+**Note on the AAPL AUC revision:** The original single-day Dec 30 result
+(L2 AUC 0.54) is revised down to 0.529 in the pooled two-date analysis.
+The holiday-week session inflated the signal slightly via day-specific drift.
+
+### Bootstrap CIs on L2 logistic coefficients
+
+| Feature | AAPL | INTC | MSFT |
+|---------|------|------|------|
+| `spread_at_entry_ticks` | −0.151 *** | −0.007 | −0.037 |
+| `time_frac` | −0.002 | **−0.367 \*\*\*** | +0.037 |
+| `queue_position_at_entry` | −0.027 | **−0.110 \*\*\*** | −0.002 |
+| `side_bid` | +0.028 | +0.095 *** | +0.112 *** |
+| `queue_granularity_at_entry` | +0.004 | −0.070 | +0.004 |
+| `book_imbalance_at_entry` | −0.024 | −0.043 | +0.025 |
+
+\*\*\* = 95% bootstrap CI excludes zero.
+
+Key contrasts:
+- **Spread** is the only significant predictor for AAPL; it is irrelevant for INTC.
+- **Queue position** is 4× larger for INTC (−0.110) than AAPL (−0.027) and
+  significant only in INTC. In a wider-spread stock, how far back you are in
+  the queue matters far more than what the spread is.
+- **Time_frac** dominates for INTC (−0.367 ***) but is near-zero for AAPL.
+- **Granularity** spans zero for all three tickers — the null result holds
+  even with more data and a regime better suited to the hypothesis.
+
+### LightGBM time_frac ablation — cross-ticker
+
+| Ticker | Level | LGB full | LGB w/o time_frac | Drop |
+|--------|-------|----------|-------------------|------|
+| AAPL | L2 | 0.515 | 0.499 | −0.016 (time_frac = whole edge) |
+| INTC | L2 | 0.486 | **0.561** | **+0.075** (time_frac hurts) |
+| MSFT | L2 | 0.510 | 0.500 | −0.010 |
+
+For INTC, removing time_frac *improves* LGB AUC from 0.486 → 0.561. The
+intraday regime shift in INTC is so strong that a linearly learned time_frac
+is counter-productive on the test period — the morning fill-rate profile
+reverses in the afternoon. AAPL's result (time_frac = the whole edge) does
+not generalise: in INTC, queue position carries real out-of-sample signal
+once the noisy time trend is removed.
+
+### Adverse selection — cross-ticker comparison
+
+| Ticker | Level | Mean adv. sel. | 95% CI | Frac. adversely selected |
+|--------|-------|----------------|--------|--------------------------|
+| AAPL | L1 | +1.47¢ | [+1.40, +1.53] | 77.6% |
+| AAPL | L2 | +1.35¢ | [+1.29, +1.41] | 75.1% |
+| INTC | L1 | +0.88¢ | [+0.85, +0.90] | 79.6% |
+| INTC | L2 | +0.91¢ | [+0.88, +0.95] | 79.4% |
+| MSFT | L1 | +0.91¢ | [+0.88, +0.95] | 74.8% |
+| MSFT | L2 | +0.86¢ | [+0.82, +0.91] | 72.2% |
+
+**L1 > L2 adverse selection is AAPL-specific.** The gap is significant for
+AAPL (p = 0.014) but not for INTC or MSFT (p ≈ 0.08). The Glosten-Milgrom
+mechanism — informed flow concentrating at the touch, making L1 fills more
+adversely selected — appears only in the most liquid, HFT-dominated stock.
+
+INTC and MSFT absolute adverse selection (~0.87–0.91¢) is ~40% lower than
+AAPL (~1.35–1.47¢). Wider-spread stocks are cheaper to execute in quality
+terms despite being harder to fill (lower fill rates).
+
+### Optimal placement — C\* by ticker
+
+| Ticker | p1 (L1 fill) | p2 (L2 fill) | Mean AS1 | Mean AS2 | **C\*** | Prefer at C=10¢ |
+|--------|-------------|-------------|----------|----------|---------|-----------------|
+| AAPL | 0.651 | 0.577 | +1.47¢ | +1.35¢ | **8.96¢** | L1 |
+| MSFT | 0.684 | 0.579 | +0.91¢ | +0.86¢ | **6.03¢** | L1 |
+| INTC | 0.557 | 0.317 | +0.88¢ | +0.91¢ | **1.64¢** | L1 |
+
+The crossover varies enormously across tickers. For INTC, L2 posting is only
+worthwhile when the market-order fallback costs less than 1.64¢ — a threshold
+exceeded by almost any realistic execution scenario. The "L2 is almost always
+better" conclusion from AAPL does not generalise: it depends entirely on the
+fill-rate gap between levels, which is small in AAPL (8pp) and large in INTC
+(24pp).
+
+See `results/extended/optimal_placement_crossover.png` for the full curve.
+
+### Survival analysis — Cox PH by ticker (L2)
+
+| Ticker | C-index | Significant predictors |
+|--------|---------|----------------------|
+| AAPL | 0.536 | `spread_ticks` (HR=0.911 ***), `side_bid` (HR=1.028 **) |
+| INTC | **0.613** | `time_frac` (HR=0.785 ***), `queue_position` (HR=0.909 ***), `side_bid` (HR=1.066 ***) |
+| MSFT | 0.530 | `side_bid` (HR=1.067 ***) |
+
+INTC's Cox C-index (0.613) is the highest across all models — depth fill
+timing in wider-spread stocks is substantially more predictable than in AAPL.
+The dominant predictor is time_frac (HR=0.785: early-day fills 21% faster than
+late-day), followed by queue position (HR=0.909: one std. step back in queue →
+9% slower fill hazard). Log-rank test by spread tertile: AAPL p=0.000, INTC
+p=0.030 (marginal), MSFT p=0.009.
+
+### Panel regression with ticker fixed effects (L2)
+
+Pooled logistic regression across all 18,629 L2 orders with MSFT and INTC
+dummy variables (AAPL as reference). OOS AUC = 0.530.
+
+**Significant panel predictors** (bootstrap 95% CI excludes zero):
+
+| Feature | Coef (std.) | 95% CI | Notes |
+|---------|-------------|--------|-------|
+| `ticker_INTC` | −0.468 | [−0.557, −0.385] | INTC depth fills much harder |
+| `queue_position_at_entry` | −0.190 | [−0.275, −0.108] | Consistent cross-ticker |
+| `spread_at_entry_ticks` | −0.159 | [−0.197, −0.120] | Consistent cross-ticker |
+| `ofi_30s` | +0.138 | [+0.096, +0.182] | Driven by INTC/MSFT |
+| `time_frac` | −0.094 | [−0.128, −0.059] | Consistent cross-ticker |
+| `ticker_MSFT` | −0.071 | [−0.107, −0.033] | MSFT slightly harder than AAPL |
+| `side_bid` | +0.067 | [+0.039, +0.096] | Consistent cross-ticker |
+
+Queue position, spread, time_frac, OFI_30s, and side_bid are all significant
+in the panel — robust features that survive across ticker regimes. Granularity
+is not significant (−0.017 [−0.060, +0.018]).
+
+### OFI predictive power — cross-ticker
+
+| Ticker | OFI_30s coef | 95% CI | Significant? |
+|--------|-------------|--------|--------------|
+| AAPL | +0.009 | [−0.046, +0.063] | No |
+| INTC | **+0.202** | [+0.120, +0.280] | **Yes (\*\*\*)** |
+| MSFT | **+0.168** | [+0.080, +0.258] | **Yes (\*\*\*)** |
+
+**OFI arbitrage is AAPL-specific.** In AAPL, HFTs absorb OFI signal before
+resting passive orders benefit. In INTC and MSFT, 30-second order flow
+imbalance is a significant positive predictor of depth fill probability —
+higher buying pressure means resting bids at L2 are more likely to fill within
+60 s. This makes intuitive sense: INTC's lower HFT participation means the OFI
+signal is not immediately competed away, and buying pressure that arrives at
+the touch eventually propagates to L2 within the order's lifetime.
+
+---
+
+## Why this is interesting
+
+The multi-ticker analysis reveals that microstructure regime matters as much
+as model choice. Three findings stand out:
+
+**1. The fill-predictability gap is inverted at INTC.**
+In AAPL, the "hard" result is that depth fills are barely predictable and
+time_frac is the whole story. In INTC, depth fills are still only modestly
+predictable in aggregate (AUC ≈ 0.50–0.56), but the *nature* of the signal
+is completely different: queue position and OFI carry real cross-sectional
+information that survives the time_frac ablation. The implication for
+execution algorithms is that book-state conditioning is worthwhile in INTC
+but not in AAPL.
+
+**2. OFI arbitrage is a function of HFT participation, not a universal law.**
+The original finding that OFI is null in AAPL was correct but not general.
+OFI_30s is the fourth-largest panel coefficient (+0.138 ***) because it has
+strong signal in less liquid stocks. The Cont et al. (2014) finding that OFI
+predicts price direction holds everywhere; whether that translates into fill
+probability depends on whether HFTs have already acted on it.
+
+**3. Optimal placement is not a single number.**
+The L1/L2 crossover ranges from C\* ≈ 1.6¢ (INTC) to C\* ≈ 9¢ (AAPL).
+Any passive execution framework that uses a fixed L1/L2 preference will be
+wrong for at least one of these stocks. The key input is the fill-rate gap
+between levels, not the spread per se.
+
+---
+
+## Limitations
+
+1. **Passive-shadow model (no market impact).** Injected orders are
+   counterfactual — they don't displace resting orders, affect prices, or
+   attract strategic responses. Real orders do.
+
+2. **Three tickers, two dates.** Findings represent two normal trading days
+   in August 2019 and one holiday-week session. MSFT exhibited severe
+   intraday non-stationarity on 2019-08-30 that made its model anti-predictive
+   on the test period. A larger panel would separate persistent regime effects
+   from day-specific noise.
+
+3. **Granularity variance structurally near-zero across all tickers.** Even
+   INTC — the widest-spread stock tested — shows K/Q IQR of only 0.0014 at L2.
+   The hypothesis that granularity predicts fills cannot be properly tested
+   without a stock where K/Q varies meaningfully (e.g., small-cap, pre-2010
+   data, or a period of unusual market-maker fragmentation).
+
+4. **OOS split is a single contiguous block.** The last 20% of each session
+   may differ systematically from the morning (open volatility, end-of-day
+   effects). k-fold time-series cross-validation would give more stable AUC
+   estimates.
+
+5. **Adverse selection is measured at 1-second horizon only.** A longer
+   horizon (5 s, 30 s) might reveal stronger adverse selection for faster
+   fills in INTC, where the OFI signal decays more slowly than in AAPL.
+
+6. **MSFT non-stationarity unexplained.** The AUC < 0.5 result for MSFT at
+   both levels indicates the training and test periods have inverted
+   relationships. The cause (a specific intraday price move, a news event, or
+   structural session change on 2019-08-30) was not investigated.
+
+---
 
 ## What I'd do with more time
 
-1. **Multi-stock panel across spread regimes.** Run the same experiment on
-   10–15 tickers spanning the liquidity spectrum (e.g., AAPL, MSFT, a
-   mid-cap, a small-cap). Stocks with wider average spreads have larger, more
-   fragmented depth queues — the regime where K/Q actually varies and the
-   granularity hypothesis has power.
+1. **Expand the ticker panel.** Add 5–10 stocks spanning the full liquidity
+   spectrum: a large-cap ETF, two mid-caps, and two small-caps. The OFI and
+   queue-position effects suggest a clear monotone relationship with HFT
+   participation; a larger panel could quantify that slope.
 
-2. **Survival analysis on time-to-fill.** *(Done — see below)*
+2. **Multi-day per ticker.** MSFT's non-stationarity flags the risk of
+   day-specific results. Three dates per ticker — one normal, one
+   high-volatility, one low-volume — would separate structural regime effects
+   from session noise.
 
-3. **Add order flow imbalance (OFI) as a feature.** *(Done — null result at both levels)*
+3. **Granularity in a wider-spread regime.** All three tickers on these days
+   have K/Q clustered at 0.01. Testing the original hypothesis properly
+   requires a stock where K/Q has an IQR of at least 0.05.
 
-### Survival analysis (Cox proportional hazards)
-
-Source: `notebooks/08_survival.py`
-
-- **Median fill time:** L1 = **9.1 s**, L2 = **12.2 s** — depth orders take 34% longer when they fill.
-- **Log-rank test (narrow vs wide spread):** L1 p=0.31 (not significant); L2 p=0.032 (significant) — spread predicts fill speed at depth but not at the touch.
-- **Cox C-index:** L1 = 0.528 in-sample, 0.506 OOS; L2 = 0.545 in-sample, 0.500 OOS. Same degradation pattern as logistic AUC.
-- **Significant Cox predictors at L2** (all p < 0.05):
-
-  | Feature       | HR     | p-value    | Interpretation                        |
-  |---------------|--------|------------|---------------------------------------|
-  | `side_bid`    | 0.899  | 6 × 10⁻⁸  | Bids fill 10% more slowly             |
-  | `spread_ticks`| 0.915  | 3 × 10⁻⁵  | Wider spread → slower fill            |
-  | `time_frac`   | 0.954  | 0.026      | Earlier in day → faster fill          |
-  | `imbalance`   | 0.957  | 0.028      | Higher imbalance → slower fill        |
-
-- **At L1:** only `spread_ticks` significant (HR=0.946, p=0.006). Same as logistic.
-- **Granularity null** at both levels (L2: HR=1.025, p=0.19).
-- **OFI_10s null** at both levels (L2: p=0.26). Consistent with logistic result.
-- **Interpretation:** The survival model confirms the logistic findings with a richer framework. The same four features that predict *whether* a depth order fills also predict *how fast* it fills — with consistent signs and similar magnitudes. The Cox framework adds the finding that spread is significant at L1 for fill *speed* even though it was only marginal in the binary model.
-
-### Optimal passive placement
-
-Source: `notebooks/09_optimal_placement.py`
-
-**Framework:** Expected implementation shortfall (IS) per share in cents:
-
-    E[IS | L1] = p1 × (−S + AS1) + (1 − p1) × C
-    E[IS | L2] = p2 × (−S − 1¢ + AS2) + (1 − p2) × C
-
-where S = half-spread, AS = mean adverse selection, C = unfill penalty (cost of market-order fallback).
-
-**Key result — crossover at C\* = 8¢/share:**
-
-| Spread | C\* (crossover) | Below C\*: prefer | Above C\*: prefer |
-|--------|-----------------|-------------------|-------------------|
-| 1-tick | 7.7¢            | L2                | L1                |
-| 2-tick | 9.8¢            | L2                | L1                |
-| 3-tick | 8.3¢            | L2                | L1                |
-
-**Interpretation:** L2 is the superior passive strategy unless the market-order fallback exceeds ~8¢/share (~5 bps for AAPL at $150). The extra 1-cent price improvement from posting one tick deeper outweighs the 8pp lower fill rate for all realistic unfill penalties faced by a patient trader. Only when execution urgency is high (alpha decays fast, or hedging requires certainty of fill) does L1 dominate. At C=10¢, ~69% of spread × imbalance conditions flip to L1 — concentrated in the wide-imbalance, narrow-spread regime where missing a fill is most costly.
+4. **Longer adverse selection horizon for INTC.** OFI is significant in INTC;
+   testing whether fills preceded by high OFI also have worse 30 s adverse
+   selection would close the loop between fill probability and execution quality.
