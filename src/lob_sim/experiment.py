@@ -35,7 +35,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from lob_sim.explore import find_all_lobster_pairs, load_messages, parse_filename_meta
+from lob_sim.explore import find_all_lobster_pairs, find_lobster_pair, load_messages, parse_filename_meta
 from lob_sim.injection import HypotheticalOrder, InjectionSimulator
 from lob_sim.ofi import compute_ofi, windowed_ofi
 from lob_sim.orderbook import LimitOrderBook
@@ -47,7 +47,7 @@ _DAY_END   = 57_300   # 15:55
 
 
 def run_experiment(
-    msg_path: Path | str,
+    msg_path: Path | str | None = None,
     n_injections: int = 5_000,
     min_queue_shares: int = 100,
     order_size: int = 100,
@@ -80,6 +80,8 @@ def run_experiment(
     """
     if depth_level not in (1, 2):
         raise ValueError(f"depth_level must be 1 or 2, got {depth_level}")
+    if msg_path is None:
+        msg_path, _ = find_lobster_pair(Path("data/raw"))
     msg_path = Path(msg_path)
     out_dir  = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
