@@ -30,6 +30,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, ttest_ind
 from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 from lifelines import KaplanMeierFitter, CoxPHFitter
@@ -42,10 +43,12 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 RNG_SEED     = 42
 N_BOOT       = 2_000
+N_CV_SPLITS  = 4
 LIFETIME     = 60.0
 _DAY_START   = 34_500.0
 _DAY_END     = 57_300.0
-RAW_TO_CENTS = 0.01   # adverse_selection_1s units → cents
+RAW_TO_CENTS    = 0.01   # adverse_selection units → cents
+ADV_HORIZONS    = [1, 5, 10, 30]   # seconds
 
 FEATURES_BASE = [
     "spread_at_entry_ticks",
@@ -64,12 +67,17 @@ rng = np.random.default_rng(RNG_SEED)
 # ── shared helpers ────────────────────────────────────────────────────────────
 
 def add_derived(df: pl.DataFrame) -> pl.DataFrame:
-    return df.with_columns(
+    exprs = [
         pl.col("side").eq("bid").cast(pl.Int8).alias("side_bid"),
         ((pl.col("entry_timestamp") - _DAY_START) / (_DAY_END - _DAY_START))
         .clip(0.0, 1.0).alias("time_frac"),
         (pl.col("adverse_selection_1s") * RAW_TO_CENTS).alias("adv_cents"),
-    )
+    ]
+    for h in ADV_HORIZONS:
+        col = f"adverse_selection_{h}s"
+        if col in df.columns:
+            exprs.append((pl.col(col) * RAW_TO_CENTS).alias(f"adv_{h}s_cents"))
+    return df.with_columns(exprs)
 
 
 def load_pooled(level: int) -> pl.DataFrame:
@@ -90,41 +98,45 @@ def get_xy(df: pl.DataFrame, features: list[str]) -> tuple[np.ndarray, np.ndarra
 def chrono_auc(
     df: pl.DataFrame,
     features: list[str],
-    test_frac: float = 0.2,
 ) -> tuple[float, float, float]:
+    """Walk-forward CV AUC. Returns (mean, mean-2*std, mean+2*std) across folds."""
     X, y = get_xy(df, features)
-    n = len(X); split = int(n * (1 - test_frac))
-    sc = StandardScaler().fit(X[:split])
-    m  = LogisticRegression(max_iter=1_000, random_state=RNG_SEED)
-    m.fit(sc.transform(X[:split]), y[:split])
-    prob = m.predict_proba(sc.transform(X[split:]))[:, 1]
-    pt   = roc_auc_score(y[split:], prob)
-    boots = [
-        roc_auc_score(
-            y[split:][idx := rng.integers(0, len(y[split:]), len(y[split:]))],
-            prob[idx],
-        )
-        for _ in range(N_BOOT)
-    ]
-    return pt, float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))
+    tscv = TimeSeriesSplit(n_splits=N_CV_SPLITS)
+    fold_aucs = []
+    for train_idx, test_idx in tscv.split(X):
+        if len(np.unique(y[test_idx])) < 2:
+            continue
+        sc = StandardScaler().fit(X[train_idx])
+        m  = LogisticRegression(max_iter=1_000, random_state=RNG_SEED)
+        m.fit(sc.transform(X[train_idx]), y[train_idx])
+        prob = m.predict_proba(sc.transform(X[test_idx]))[:, 1]
+        fold_aucs.append(roc_auc_score(y[test_idx], prob))
+    mean = float(np.mean(fold_aucs))
+    std  = float(np.std(fold_aucs))
+    return mean, mean - 2 * std, mean + 2 * std
 
 
 def lgb_auc(
     df: pl.DataFrame,
     features: list[str],
-    test_frac: float = 0.2,
 ) -> float:
+    """Walk-forward CV AUC for LightGBM. Returns mean AUC across folds."""
     X, y = get_xy(df, features)
-    n = len(X); split = int(n * (1 - test_frac))
-    params = dict(
-        objective="binary", metric="auc", verbosity=-1,
-        n_estimators=200, learning_rate=0.05,
-        num_leaves=31, random_state=RNG_SEED,
-    )
-    m = lgb.LGBMClassifier(**params)
-    m.fit(X[:split], y[:split])
-    prob = m.predict_proba(X[split:])[:, 1]
-    return roc_auc_score(y[split:], prob)
+    tscv = TimeSeriesSplit(n_splits=N_CV_SPLITS)
+    fold_aucs = []
+    for train_idx, test_idx in tscv.split(X):
+        if len(np.unique(y[test_idx])) < 2:
+            continue
+        params = dict(
+            objective="binary", metric="auc", verbosity=-1,
+            n_estimators=200, learning_rate=0.05,
+            num_leaves=31, random_state=RNG_SEED,
+        )
+        m = lgb.LGBMClassifier(**params)
+        m.fit(X[train_idx], y[train_idx])
+        prob = m.predict_proba(X[test_idx])[:, 1]
+        fold_aucs.append(roc_auc_score(y[test_idx], prob))
+    return float(np.mean(fold_aucs))
 
 
 TICKERS = ["AAPL", "INTC", "MSFT"]
@@ -295,6 +307,48 @@ plt.tight_layout()
 fig.savefig(PLOTS_DIR / "adverse_selection_intraday.png", dpi=150)
 plt.close(fig)
 print(f"  Saved: {PLOTS_DIR}/adverse_selection_intraday.png")
+
+# multi-horizon adverse selection decay
+print("\n  Adverse selection decay across horizons (L2, filled orders):")
+df_l2_filled = load_pooled(2).filter(pl.col("filled"))
+horizon_cols = [f"adv_{h}s_cents" for h in ADV_HORIZONS]
+avail_horizons = [h for h, c in zip(ADV_HORIZONS, horizon_cols) if c in df_l2_filled.columns]
+avail_cols     = [c for c in horizon_cols if c in df_l2_filled.columns]
+
+if avail_horizons:
+    fig, ax = plt.subplots(figsize=(8, 4))
+    colors_ticker = {"AAPL": "#4a90d9", "INTC": "#e07b3a", "MSFT": "#5cb85c"}
+    for ticker in TICKERS:
+        sub = df_l2_filled.filter(pl.col("ticker") == ticker)
+        means = []
+        los   = []
+        his   = []
+        for col in avail_cols:
+            vals = sub[col].drop_nulls().to_numpy()
+            if len(vals) < 10:
+                means.append(float("nan")); los.append(float("nan")); his.append(float("nan"))
+                continue
+            m = vals.mean()
+            boots = [rng.choice(vals, len(vals), replace=True).mean() for _ in range(500)]
+            means.append(m)
+            los.append(float(np.percentile(boots, 2.5)))
+            his.append(float(np.percentile(boots, 97.5)))
+        c = colors_ticker.get(ticker, "grey")
+        ax.plot(avail_horizons, means, marker="o", color=c, label=ticker)
+        ax.fill_between(avail_horizons, los, his, color=c, alpha=0.15)
+        print(f"  {ticker:<5}  " + "  ".join(
+            f"{h}s={m:+.3f}¢" for h, m in zip(avail_horizons, means)
+        ))
+    ax.axhline(0, color="black", linewidth=0.7, linestyle="--")
+    ax.set_xlabel("Horizon after fill (seconds)")
+    ax.set_ylabel("Mean adverse selection (¢)")
+    ax.set_title("Adverse selection decay — L2 filled orders")
+    ax.set_xticks(avail_horizons)
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(PLOTS_DIR / "adverse_selection_decay.png", dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {PLOTS_DIR}/adverse_selection_decay.png")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

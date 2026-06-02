@@ -188,29 +188,21 @@ class InjectionSimulator:
             self._mid_times.append(ts)
             self._mid_values.append(mid)
 
-    def compute_outcomes(
-        self,
-        order: HypotheticalOrder,
-        lookback_after_fill: float = 1.0,
-    ) -> dict:
+    _ADVERSE_HORIZONS: tuple[float, ...] = (1.0, 5.0, 10.0, 30.0)
+
+    def compute_outcomes(self, order: HypotheticalOrder) -> dict:
         """
         Summarise the outcome for one hypothetical order after full replay.
-
-        Parameters
-        ----------
-        order:
-            A HypotheticalOrder that has been through process_event() calls.
-        lookback_after_fill:
-            Seconds after first fill at which to sample mid for adverse
-            selection (default 1.0 s).
 
         Returns
         -------
         dict with keys:
             filled, fully_filled, time_to_first_fill, time_to_full_fill,
             mid_at_entry, mid_at_first_fill, mid_at_full_fill,
-            adverse_selection_1s, queue_position_at_entry,
-            book_imbalance_at_entry, spread_at_entry_ticks
+            adverse_selection_1s/5s/10s/30s,
+            queue_position_at_entry, orders_ahead_at_entry,
+            queue_granularity_at_entry, book_imbalance_at_entry,
+            spread_at_entry_ticks
         """
         first_fill = order.fills[0] if order.fills else None
         last_fill = order.fills[-1] if order.fills else None
@@ -227,20 +219,21 @@ class InjectionSimulator:
         mid_at_first = first_fill[2] if first_fill else None
         mid_at_full = last_fill[2] if last_fill and order.status == "fully_filled" else None
 
-        # Adverse selection: signed mid move in the direction that hurts us
-        # Positive = we got hit by informed flow (mid moved against position)
-        adverse_1s: float | None = None
-        if first_fill is not None and self._mid_times:
-            target_ts = first_fill[0] + lookback_after_fill
-            idx = bisect.bisect_left(self._mid_times, target_ts)
-            if idx < len(self._mid_values):
-                mid_1s_after = self._mid_values[idx]
-                if order.side == "bid":
-                    # Bought: adverse if mid falls (we overpaid)
-                    adverse_1s = (mid_at_first or 0.0) - mid_1s_after
-                else:
-                    # Sold: adverse if mid rises (we undersold)
-                    adverse_1s = mid_1s_after - (mid_at_first or 0.0)
+        # Adverse selection at multiple horizons.
+        # Positive = mid moved against our position (informed flow hit us).
+        adv: dict[str, float | None] = {}
+        for h in self._ADVERSE_HORIZONS:
+            key = f"adverse_selection_{int(h)}s"
+            val: float | None = None
+            if first_fill is not None and self._mid_times:
+                idx = bisect.bisect_left(self._mid_times, first_fill[0] + h)
+                if idx < len(self._mid_values):
+                    mid_after = self._mid_values[idx]
+                    if order.side == "bid":
+                        val = (mid_at_first or 0.0) - mid_after
+                    else:
+                        val = mid_after - (mid_at_first or 0.0)
+            adv[key] = val
 
         return {
             "filled": bool(order.fills),
@@ -250,7 +243,7 @@ class InjectionSimulator:
             "mid_at_entry": order.mid_at_entry,
             "mid_at_first_fill": mid_at_first,
             "mid_at_full_fill": mid_at_full,
-            "adverse_selection_1s": adverse_1s,
+            **adv,
             "queue_position_at_entry": order.queue_position_at_entry,
             "orders_ahead_at_entry": order.orders_ahead_at_entry,
             "queue_granularity_at_entry": order.queue_granularity_at_entry,

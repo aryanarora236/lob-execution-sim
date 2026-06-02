@@ -28,14 +28,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 
 RESULTS_DIR = Path("results")
 PLOTS_DIR   = Path("results/multi_ticker")
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-RNG_SEED = 0
-N_BOOT   = 2_000
+RNG_SEED    = 0
+N_CV_SPLITS = 4
 
 FEATURES = [
     "spread_at_entry_ticks",
@@ -81,30 +82,22 @@ def prep_features(df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     return X[nan_mask], y[nan_mask], available
 
 
-def time_split_auc(df: pl.DataFrame, test_frac: float = 0.2) -> tuple[float, float, float]:
-    """Logistic regression AUC with chronological train/test split + bootstrap CI."""
+def time_split_auc(df: pl.DataFrame) -> tuple[float, float, float]:
+    """Walk-forward CV AUC. Returns (mean, mean-2*std, mean+2*std) across folds."""
     X, y, _ = prep_features(df)
-    n = len(X)
-    split = int(n * (1 - test_frac))
-    X_tr, X_te = X[:split], X[split:]
-    y_tr, y_te = y[:split], y[split:]
-
-    scaler = StandardScaler().fit(X_tr)
-    X_tr_s = scaler.transform(X_tr)
-    X_te_s = scaler.transform(X_te)
-
-    model = LogisticRegression(max_iter=1_000, random_state=RNG_SEED)
-    model.fit(X_tr_s, y_tr)
-    proba = model.predict_proba(X_te_s)[:, 1]
-    point = roc_auc_score(y_te, proba)
-
-    rng = np.random.default_rng(RNG_SEED)
-    boot = [
-        roc_auc_score(y_te[idx := rng.integers(0, len(y_te), len(y_te))], proba[idx])
-        for _ in range(N_BOOT)
-    ]
-    lo, hi = float(np.percentile(boot, 2.5)), float(np.percentile(boot, 97.5))
-    return point, lo, hi
+    tscv = TimeSeriesSplit(n_splits=N_CV_SPLITS)
+    fold_aucs = []
+    for train_idx, test_idx in tscv.split(X):
+        if len(np.unique(y[test_idx])) < 2:
+            continue
+        sc = StandardScaler().fit(X[train_idx])
+        m  = LogisticRegression(max_iter=1_000, random_state=RNG_SEED)
+        m.fit(sc.transform(X[train_idx]), y[train_idx])
+        proba = m.predict_proba(sc.transform(X[test_idx]))[:, 1]
+        fold_aucs.append(roc_auc_score(y[test_idx], proba))
+    mean = float(np.mean(fold_aucs))
+    std  = float(np.std(fold_aucs))
+    return mean, mean - 2 * std, mean + 2 * std
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
